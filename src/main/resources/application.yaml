@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: TravelCare_Agent
+  datasource:
+    url: ${TRAVELCARE_DB_URL:jdbc:mysql://localhost:3307/travelcare_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${TRAVELCARE_REDIS_HOST:localhost}
+      port: ${TRAVELCARE_REDIS_PORT:6379}
+      password: ${TRAVELCARE_REDIS_PASSWORD:}
+      database: ${TRAVELCARE_REDIS_DATABASE:0}
+      timeout: 3s
+
+travelcare:
+  jwt:
+    issuer: ${TRAVELCARE_JWT_ISSUER:travelcare-agent}
+    secret: ${TRAVELCARE_JWT_SECRET:change-me-in-local-env}
+    ttl-seconds: ${TRAVELCARE_JWT_TTL_SECONDS:7200}
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+
+knife4j:
+  enable: true
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] [%X{traceId:-}] %logger{36} - %msg%n"
