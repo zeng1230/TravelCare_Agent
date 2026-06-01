@@ -7,6 +7,7 @@ import travelcare_agent.retrieval.repository.KnowledgeChunkRepository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public class MyBatisKnowledgeChunkRepository implements KnowledgeChunkRepository {
@@ -25,6 +26,11 @@ public class MyBatisKnowledgeChunkRepository implements KnowledgeChunkRepository
             mapper.updateById(chunk);
         }
         return chunk;
+    }
+
+    @Override
+    public Optional<KnowledgeChunk> findById(Long id) {
+        return Optional.ofNullable(mapper.selectById(id));
     }
 
     @Override

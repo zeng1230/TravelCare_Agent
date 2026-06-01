@@ -1,212 +1,432 @@
 # TravelCare Agent
 
-## 1. Project Overview
+## 项目概览
 
-**TravelCare Agent** is an advanced customer service agent for the travel industry. The project is implemented across three main stages:
-- **Stage 1 (Synchronous AI Flow):** Handles standard LLM interactions synchronously, processing incoming messages and delegating structured tasks to tool calling (e.g., retrieving itineraries, executing basic updates).
-- **Stage 2 (Asynchronous Durable Workflow Engine):** Transforms the system into a resilient, event-driven, and durable workflow engine. It orchestrates long-running processes (like refunds or escalated human reviews) asynchronously, ensuring fault tolerance, idempotency, and persistence of intermediate states.
-- **Stage 3 (Grounded Context Layer, Memory, RAG, and Context Assembly):** Establishes the agent's cognitive base. It introduces a Retrieval-Augmented Generation (RAG) system for active policy lookup, time-sensitive document filters, user preference/trip memory management, and a unified Context Assembler that tracks chunk citations and supports comprehensive debug APIs.
+TravelCare Agent 是一个面向旅行客服场景的后端系统原型，核心目标是把“AI 回复”放进一个可恢复、可审计、可解释、可评测的工程闭环里，而不是做一个只依赖 prompt 的聊天 Demo。
 
-## 2. Architecture Highlights
+系统以 Spring Boot 为主体，围绕订单查询、退款咨询、客服会话、工作流任务、工具调用、RAG、Memory、人工复核、审计日志、异步 worker、AgentRun 追踪、Replay 下钻和本地 Evaluation Report 形成完整链路。
 
-- **Outbox Pattern (`workflow_tasks` table + RabbitMQ):** 
-  Ensures reliable message delivery and state consistency. The system saves tasks in the database in the same transaction as business data (the "Outbox") and triggers asynchronous execution via RabbitMQ.
-- **Concurrency Lock (Redis with Lua atomic unlock):** 
-  Prevents race conditions by using distributed locking backed by Redis. Lua scripts are employed to ensure the check-and-release process of a lock is completely atomic.
-- **Human-in-the-loop (工单流转):** 
-  Supports suspending a workflow when a task requires human intervention (e.g., complex queries or special approvals). The workflow pauses, a case is routed to human operators, and once resolved, it injects the response back and resumes.
-- **Self-Healing Scheduler:** 
-  A periodic background job (Spring `@Scheduled`) identifies and recovers tasks stuck in a `PENDING` state for more than 2 minutes, protecting against worker crashes and ensuring eventual completion.
-- **Grounded RAG Pipeline & Fulltext Search:**
-  Queries ingested SOP policies in real-time. Employs MySQL FULLTEXT index searches with a programmatic wildcard `LIKE` search fallback if FULLTEXT yields 0 results. It filters out expired knowledge based on `effective_to` and `effective_from` dates.
-- **Persistent Memory System:**
-  Tracks user preferences and trip contexts. Restricts writes to sensitive, authoritative states (such as refund eligibility, order status, and payment state) using a non-authoritative memory barrier.
-- **Context Assembler & Observability:**
-  Assembles real-time session events, workflows, refund cases, RAG citations, and memories. Log files and assistant metadata automatically track and record citation chunk IDs.
+当前退款资格判断由 `RefundEligibilityPolicy` 等确定性规则负责。RAG 和 Memory 可以提供上下文，但不能覆盖退款规则；LLM / Agent 在项目定位中负责理解用户意图、组织回复和串联流程，后端负责状态、幂等、工作流、工具、审计、异步执行和评测。
 
-## 3. Getting Started
+## 为什么它不是一个简单的 Chatbot
 
-### Prerequisites
-You need Docker and Java (JDK 17+) installed.
+普通 prompt-only chatbot 通常只关注“输入一句话，输出一句话”，但真实客服系统还需要回答这些问题：
 
-#### Docker Setup Commands (MySQL, Redis, RabbitMQ)
+- 回复基于哪些用户输入、知识片段和记忆？
+- 退款资格是由模型猜出来的，还是由稳定规则判断出来的？
+- 异步任务失败、重试或 worker 崩溃时，系统如何恢复？
+- 一次客服回复能否被审计、复盘和解释？
+- 新改动是否破坏了核心退款规则？
 
-```bash
-# Start required infrastructure via Docker Compose
-docker-compose up -d
+TravelCare Agent 把这些问题拆到后端工程能力中处理：
 
-# Or run individual containers if not using docker-compose:
-docker run -d --name travelcare-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=travelcare -p 3306:3306 mysql:8.0
-docker run -d --name travelcare-redis -p 6379:6379 redis:7.0
-docker run -d --name travelcare-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+- 用 workflow 和 task 管理客服流程状态。
+- 用 idempotency key 避免重复执行。
+- 用 audit logs 记录关键动作。
+- 用 AgentRun 记录单次 Agent 回复的事实来源。
+- 用 Replay API 只读下钻一次回复。
+- 用 Evaluation Report 批量跑 golden cases，防止规则回归。
+
+## 系统架构
+
+```text
+用户消息
+  |
+  v
+Session / SessionEvent
+  |
+  v
+Agent Orchestrator
+  |
+  +--> 订单查询 / 退款资格规则
+  +--> RAG 检索
+  +--> Memory 读取
+  +--> Workflow / Task
+  +--> Human Review
+  |
+  v
+AgentRun 追踪
+  |
+  +--> Replay API
+  +--> Evaluation Report
 ```
 
-### Application Build and Run Commands
+主要技术栈：
 
-```bash
-# Build the application
-.\mvnw.cmd clean package -DskipTests
+- Java 17
+- Spring Boot 3.3.4
+- MyBatis Plus
+- MySQL
+- Flyway
+- Redis
+- RabbitMQ
+- JUnit
 
-# Run the application
-.\mvnw.cmd spring-boot:run
+## 核心能力
+
+- 会话管理：创建 session，写入用户和助手事件，查询会话事件。
+- 订单查询：支持旅行订单信息查询和退款咨询入口。
+- 退款预判：基于确定性规则判断是否满足退款条件。
+- RAG：支持知识文档、知识分块和检索命中追踪。
+- Memory：支持用户记忆存储与读取，并参与 AgentRun 追踪。
+- Workflow：支持工作流、步骤、任务、异步 worker、失败标记和重试。
+- Human Review：支持人工复核 case 的创建、分配和处理。
+- Audit Log：记录关键业务动作，便于审计。
+- AgentRun：记录一次 Agent 回复的输入、检索、记忆、工作流快照、输出、耗时和状态。
+- Replay API：只读解释单次 AgentRun。
+- Evaluation Report：通过测试侧 golden cases 生成本地 Markdown 评测报告。
+
+## 阶段路线
+
+### Stage 1：订单查询与退款咨询闭环
+
+完成基础客服闭环：用户发起咨询，系统查询订单并基于规则给出退款预判。
+
+### Stage 2：RAG / Memory / Human Review
+
+接入知识检索、用户记忆和人工复核能力，让客服链路具备上下文增强和人工兜底能力。
+
+### Stage 3：异步 Workflow Task
+
+完成异步 workflow task、重试、worker 执行和异步路径追踪，避免所有流程都阻塞在同步请求中。
+
+### Stage 4 Round 1：AgentRun 核心追踪闭环
+
+同步回复和异步 worker 回复都会创建 AgentRun。AgentRun 记录：
+
+- `inputEventIds`
+- `retrievalChunkIds`
+- `memoryIds`
+- `workflowSnapshot`
+- `outputEventId`
+- `answerHash`
+- `latencyMs`
+- `status`
+
+异步失败路径可以标记 `FAILED_*` 状态，`AgentRunService` 具备终态保护，避免已经完成或失败的 AgentRun 被后续路径错误覆盖。
+
+### Stage 4 Round 2.1：Replay API
+
+完成只读 Replay API：
+
+```http
+GET /api/agent-runs/{agentRunId}/replay
 ```
 
-## 4. API & Postman Verification Guide
+Replay 返回：
 
-Below are sample HTTP requests you can copy into Postman to verify the flow. 
-*Assuming the application runs on `http://localhost:8080`.*
+- AgentRun 摘要
+- input events preview
+- retrieval chunks preview
+- memory 摘要
+- workflow snapshot
+- current workflow
+- output assistant event preview
+- audit actions
+- 同 task attempts
+- warnings
 
-### 4.1. Creating a Session
+Replay API 不会重新执行 Agent，不会调用 LLM，不会执行 workflow，不会写 audit log，也不会创建新的 AgentRun。
+
+### Stage 4 Round 2.2：Evaluation Report
+
+完成基于 JUnit 的本地 Markdown evaluation report：
+
+```text
+target/evaluation/evaluation_report.md
+```
+
+当前 golden cases 覆盖：
+
+- CASE-001：可退款咨询成功，期望 `ELIGIBLE`
+- CASE-002：已使用订单不可退款，期望 `INELIGIBLE`
+- CASE-003：出行时间不足 24 小时不可退款，期望 `INELIGIBLE`
+- CASE-004：RAG / Memory 不得覆盖确定性退款规则，期望 `actualUnsafeOverride=false`
+
+当前全量测试基线：
+
+```text
+Tests run: 95, Failures: 0, Errors: 0, Skipped: 0
+```
+
+## AgentRun 可观测性
+
+AgentRun 是一次 Agent 回复的追踪事实源。它回答的是“这次回复到底基于什么产生”。
+
+AgentRun 记录的核心字段包括：
+
+- 输入事件 ID
+- 检索命中的知识 chunk ID
+- 使用到的 memory ID
+- workflow 快照
+- 输出 assistant event ID
+- 回复 hash
+- 延迟
+- 状态
+- 错误摘要
+
+这让系统可以在测试、排障、审计和回归分析中，把一次自然语言回复追溯到结构化数据。
+
+## Replay API
+
+Replay API 用于只读解释单次 AgentRun：
+
+```http
+GET /api/agent-runs/{agentRunId}/replay
+```
+
+设计边界：
+
+- 只读。
+- 不重新生成回答。
+- 不调用 LLM。
+- 不执行 workflow。
+- 不调用外部工具。
+- 不写入 audit logs。
+- 不创建新的 AgentRun。
+- 不修改 session events、workflow、refund case 或 memory。
+
+安全边界：
+
+- memory 不返回完整 `memoryValue`。
+- chunk content 只返回 preview。
+- session event content 只返回 preview。
+- 缺失 chunk、memory、event 或 workflow 时返回 warnings，而不是抛 500。
+
+## Evaluation Report
+
+Evaluation Report 是测试侧生成的本地 Markdown 报告，不是线上评测平台。
+
+报告路径：
+
+```text
+target/evaluation/evaluation_report.md
+```
+
+报告包含：
+
+- Summary
+- Metrics
+- Cases
+- totalCases
+- passedCases
+- failedCases
+- ragHitRate
+- memoryUsageRate
+- unsafeOverrideCount
+- agentRunSuccessCount
+- agentRunFailedCount
+- regressionStatus
+
+每个 case 会记录：
+
+- caseId
+- description
+- inputMessage
+- expectedWorkflowStatus
+- actualWorkflowStatus
+- expectedRefundDecision
+- actualRefundDecision
+- expectedRetrievalHit
+- actualRetrievalChunkIds
+- expectedMemoryUsage
+- actualMemoryIds
+- expectedAuditActions
+- actualAuditActions
+- expectedNoUnsafeOverride
+- actualUnsafeOverride
+- agentRunId
+- replayEndpoint
+- passed
+- failureReason
+
+## API 示例
+
+### 创建会话
 
 ```http
 POST /api/sessions
-Content-Type: application/json
-
-{
-  "userId": 1001,
-  "channel": "WEB"
-}
 ```
-*Response will return the `sessionId`.*
 
-### 4.2. Sending a Synchronous Message
+### 发送消息
 
 ```http
-POST /api/sessions/1/messages
-Content-Type: application/json
-
-{
-  "content": "Can you check my flight status?",
-  "idempotencyKey": "msg-001",
-  "async": false
-}
+POST /api/sessions/{sessionId}/messages
 ```
 
-### 4.3. Sending an Asynchronous Message
+### 查询会话事件
 
 ```http
-POST /api/sessions/1/messages
-Content-Type: application/json
-
-{
-  "content": "I want to refund my flight due to medical reasons.",
-  "idempotencyKey": "msg-002",
-  "async": true
-}
+GET /api/sessions/{sessionId}/events
 ```
 
-### 4.4. Simulating Idempotency / Conflict Rejection
-Send the exact same request again or with an existing idempotency key:
+### 查询会话上下文
 
 ```http
-POST /api/sessions/1/messages
-Content-Type: application/json
-
-{
-  "content": "Is my refund processed?",
-  "idempotencyKey": "msg-002",
-  "async": true
-}
+GET /api/sessions/{sessionId}/context?query=refund
 ```
-*A repeated request with the same `idempotencyKey` will return the cached response, preventing duplicate tasks.*
 
-### 4.5. Resolving a Human Case
+### 创建知识文档
 
 ```http
-POST /api/cases/1/resolve
-Content-Type: application/json
-
-{
-  "resolution": "RESOLVED",
-  "resolutionNote": "Refund approved by admin."
-}
+POST /api/knowledge/documents
 ```
 
-### 4.6. Reading Workflow Status
+### 检索知识
 
 ```http
-GET /api/workflows/status?sessionId=1
+GET /api/knowledge/search?query=refund
 ```
-*Returns aggregate status including any pending task IDs, human case IDs, and refund case IDs.*
 
-### 4.7. Ingesting Knowledge Document
+### 查询用户记忆
 
 ```http
-POST /api/knowledge/ingest
-Content-Type: application/json
-
-{
-  "title": "Refund Policy SOP",
-  "docType": "REFUND_SOP",
-  "sourceUri": "https://example.com/refund-sop",
-  "content": "Standard refund rules apply: paid tickets depart after 24 hours are refundable.",
-  "effectiveFrom": "2026-05-01T00:00:00",
-  "effectiveTo": "2026-12-31T23:59:59"
-}
+GET /api/memories/users/{userId}
 ```
 
-### 4.8. Searching Knowledge Base
+### 写入用户记忆
 
 ```http
-GET /api/knowledge/search?query=refund&docTypes=REFUND_SOP&limit=5
+POST /api/memories/users/{userId}
 ```
 
-### 4.9. Creating User Memory
+### 查询 workflow
 
 ```http
-POST /api/memories
-Content-Type: application/json
-
-{
-  "userId": 1001,
-  "memoryType": "USER_PREFERENCE",
-  "memoryKey": "tone_preference",
-  "memoryValue": "Prefers polite tone",
-  "confidence": 0.95
-}
+GET /api/workflows/{workflowId}
 ```
 
-### 4.10. Debugging Session Context
+### 查询 workflow steps
 
 ```http
-GET /api/sessions/1/context?query=refund
+GET /api/workflows/{workflowId}/steps
 ```
 
-## 5. Database Consistency Verification (SQLs)
+### 查询 session workflows
 
-Use these SQL queries to verify the database states directly.
-
-```sql
--- Check active sessions
-SELECT * FROM sessions ORDER BY id DESC LIMIT 10;
-
--- Check conversation events
-SELECT * FROM session_events WHERE session_id = 1 ORDER BY seq_no ASC;
-
--- Check workflow tasks and their execution status (Outbox)
-SELECT id, task_type, status, created_at, updated_at, last_error_message 
-FROM workflow_tasks 
-ORDER BY id DESC;
-
--- Check refund cases generated
-SELECT * FROM refund_cases ORDER BY id DESC;
-
--- Check knowledge documents and chunks
-SELECT * FROM knowledge_documents;
-SELECT * FROM knowledge_chunks;
-
--- Check user agent memories
-SELECT * FROM agent_memories;
-
--- Check audit logs for workflow state transitions and actions
-SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 50;
+```http
+GET /api/sessions/{sessionId}/workflows
 ```
 
-## 6. Test Execution & Verification
+### 查询人工复核 cases
 
-### Test Stats Summary
-The application contains a robust, transactional unit and integration test suite verifying synchronous flow, durable workflows, RAG, memory safety boundaries, session context aggregation, and concurrency safety.
+```http
+GET /api/human-review/cases
+```
 
-- **Total Test Cases**: 79
-- **Failures / Errors**: 0
-- **Status**: 100% Passed (Green)
+### 查询 AgentRun
+
+```http
+GET /api/agent-runs/{agentRunId}
+```
+
+### 查询 session 下的 AgentRuns
+
+```http
+GET /api/sessions/{sessionId}/agent-runs?pageNo=1&pageSize=20
+```
+
+### Replay 下钻
+
+```http
+GET /api/agent-runs/{agentRunId}/replay
+```
+
+## 数据库表
+
+主要表包括：
+
+- `sessions`
+- `session_events`
+- `workflows`
+- `workflow_steps`
+- `workflow_tasks`
+- `tool_calls`
+- `idempotency_keys`
+- `refund_cases`
+- `human_review_cases`
+- `audit_logs`
+- `knowledge_documents`
+- `knowledge_chunks`
+- `agent_memories`
+- `agent_runs`
+
+这些表共同支撑客服会话、状态机、异步任务、工具调用、退款判断、人工复核、知识检索、记忆和 AgentRun 可观测性。
+
+## 如何运行
+
+本地依赖：
+
+- JDK 17
+- MySQL
+- Redis
+- RabbitMQ
+
+默认配置位于：
+
+```text
+src/main/resources/application.yaml
+```
+
+默认 MySQL 连接：
+
+```text
+jdbc:mysql://localhost:3307/travelcare_agent
+username: root
+password: 123456
+```
+
+启动应用：
+
+```powershell
+.\mvnw.cmd spring-boot:run
+```
+
+## 如何测试
+
+执行全量测试：
+
+```powershell
+.\mvnw.cmd clean test
+```
+
+测试会覆盖核心客服闭环、异步 workflow、AgentRun 追踪、Replay API 和 Evaluation Report。
+
+## 面试讲述版本
+
+这个项目解决的是旅行客服场景里“AI 回复如何进入生产级后端链路”的问题。它不是只做一个聊天窗口，而是把订单查询、退款预判、知识检索、用户记忆、人工复核、异步任务、审计日志和评测报告串成完整闭环。
+
+我把退款资格判断设计为确定性 workflow 和规则引擎负责，Agent 只负责理解用户意图、组织回复和串联上下文。这样可以避免模型根据 RAG 或 Memory 中的提示越权修改退款结论，保证核心业务规则稳定可控。
+
+AgentRun 是项目里的关键可观测性设计。每次同步回复和异步 worker 回复都会生成 AgentRun，记录输入事件、检索 chunk、memory、workflow 快照、输出事件、回复 hash、耗时和状态。后续可以通过 Replay API 只读下钻一次回复，解释它为什么这样回答。
+
+项目中比较难的点是异步失败路径和终态保护。worker 重试时每次尝试都可能产生 AgentRun，如果失败路径没有收口，容易出现 AgentRun 悬挂或终态被覆盖的问题。因此我实现了失败状态标记和终态保护，保证一次回复的追踪记录不会被后续流程错误改写。
+
+这个项目和普通 AI Demo 的区别在于，它把 AI 能力放进了可审计、可恢复、可解释、可评测的后端系统里。Evaluation Report 使用 golden cases 验证退款规则、RAG/Memory 边界和 AgentRun 可下钻能力，用工程化方式降低回归风险。
+
+## 简历 Bullet 候选
+
+- 基于 Spring Boot、MyBatis Plus、MySQL 和 Flyway 构建旅行客服后端系统，覆盖会话、订单查询、退款预判、工作流和审计链路。
+- 设计并实现异步 workflow task、RabbitMQ worker、重试语义和幂等控制，支持客服流程从同步请求扩展到可恢复的异步执行。
+- 接入 RAG 和 Memory 能力，并通过确定性退款规则约束业务边界，保证知识检索和用户记忆不会覆盖核心退款资格判断。
+- 设计 AgentRun 追踪模型，记录输入事件、检索 chunk、memory、workflow 快照、输出事件、耗时、状态和错误摘要，提升 AI 回复可观测性。
+- 实现只读 Replay API，支持对单次 AgentRun 下钻查看输入、检索、记忆、workflow、输出、审计动作和同 task attempts。
+- 构建 JUnit 驱动的本地 Evaluation Report，使用 golden cases 验证可退款、不可退款、24 小时规则和 RAG/Memory 不越权等关键回归场景。
+
+## 当前限制
+
+- 当前未接入真实 LLM。
+- 当前未接入真实支付。
+- 当前未接入真实供应商。
+- 当前不会执行真实退款。
+- Evaluation Report 是测试侧本地 Markdown 报告，不是线上评测平台。
+- Replay API 是只读调试 API，不会重新执行 Agent。
+- `metadataJson` / `evidenceJson` 仍有后续脱敏加固空间。
+
+## 下一步
+
+- 接入受控的 LLM provider adapter，并保持 deterministic refund policy 的最终裁决权。
+- 对 `metadataJson` / `evidenceJson` 做字段级脱敏和最小化暴露。
+- 将 Evaluation Report 扩展为更完整的回归基线和趋势报告。
+- 增加更细粒度的 AgentRun 查询、过滤和运维视图。
+- 为真实供应商、支付和退款执行接入建立隔离 adapter 与沙箱验证流程。

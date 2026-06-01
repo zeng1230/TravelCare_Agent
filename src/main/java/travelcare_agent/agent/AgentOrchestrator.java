@@ -7,6 +7,7 @@ import travelcare_agent.enums.WorkflowStatus;
 import travelcare_agent.human.service.HumanReviewService;
 import travelcare_agent.refund.entity.RefundCase;
 import travelcare_agent.refund.repository.RefundCaseRepository;
+import travelcare_agent.conversation.entity.SessionEvent;
 import travelcare_agent.workflow.WorkflowEngine;
 import travelcare_agent.workflow.workflows.OrderRefundInquiryWorkflow;
 import travelcare_agent.retrieval.service.RetrievalSnippet;
@@ -44,19 +45,29 @@ public class AgentOrchestrator {
     }
 
     public AgentReply handle(AgentRequest request) {
-        AgentContext agentContext = contextAssembler.assemble(request.sessionId(), request.message());
+        AgentContext agentContext;
+        try {
+            agentContext = contextAssembler.assemble(request.sessionId(), request.message());
+        } catch (RuntimeException ex) {
+            throw new AgentStageException("FAILED_CONTEXT", "CONTEXT_ASSEMBLY_FAILED", null, null, ex);
+        }
 
         MockIntentClassifier.IntentResult intent = intentClassifier.classify(request.message());
-        WorkflowEngine.WorkflowResult workflowResult = workflowEngine.start(
-                OrderRefundInquiryWorkflow.TYPE,
-                new WorkflowEngine.WorkflowCommand(
-                        request.sessionId(),
-                        request.userId(),
-                        null,
-                        intent.orderNo(),
-                        request.message()
-                )
-        );
+        WorkflowEngine.WorkflowResult workflowResult;
+        try {
+            workflowResult = workflowEngine.start(
+                    OrderRefundInquiryWorkflow.TYPE,
+                    new WorkflowEngine.WorkflowCommand(
+                            request.sessionId(),
+                            request.userId(),
+                            null,
+                            intent.orderNo(),
+                            request.message()
+                    )
+            );
+        } catch (RuntimeException ex) {
+            throw new AgentStageException("FAILED_GENERATION", "WORKFLOW_EXECUTION_FAILED", agentContext, null, ex);
+        }
 
         if (workflowResult.workflow().getStatus() == WorkflowStatus.NEED_HUMAN) {
             // Try to resolve refundCaseId
@@ -83,13 +94,25 @@ public class AgentOrchestrator {
             );
         }
 
-        String answer = responseGenerator.generate(intent, workflowResult, agentContext);
+        String answer;
+        try {
+            answer = responseGenerator.generate(intent, workflowResult, agentContext);
+        } catch (RuntimeException ex) {
+            throw new AgentStageException("FAILED_GENERATION", "RESPONSE_GENERATION_FAILED", agentContext, workflowResult.workflow().getId(), ex);
+        }
 
         List<Long> retrievalChunkIds = agentContext.policySnippets().stream()
                 .map(RetrievalSnippet::chunkId)
                 .toList();
+        List<Long> documentIds = agentContext.policySnippets().stream()
+                .map(RetrievalSnippet::documentId)
+                .distinct()
+                .toList();
         List<Long> memoryIds = agentContext.activeMemories().stream()
                 .map(AgentMemory::getId)
+                .toList();
+        List<Long> eventIds = agentContext.recentEvents().stream()
+                .map(SessionEvent::getId)
                 .toList();
 
         return new AgentReply(
@@ -98,8 +121,10 @@ public class AgentOrchestrator {
                 workflowResult.workflow().getId(),
                 workflowResult.workflow().getStatus().name(),
                 answer,
+                documentIds,
                 retrievalChunkIds,
-                memoryIds
+                memoryIds,
+                eventIds
         );
     }
 
@@ -112,8 +137,47 @@ public class AgentOrchestrator {
             Long workflowId,
             String workflowStatus,
             String answer,
+            List<Long> documentIds,
             List<Long> retrievalChunkIds,
-            List<Long> memoryIds
+            List<Long> memoryIds,
+            List<Long> eventIds
     ) {
+    }
+
+    public static class AgentStageException extends RuntimeException {
+        private final String agentRunStatus;
+        private final String errorCode;
+        private final AgentContext agentContext;
+        private final Long workflowId;
+
+        public AgentStageException(
+                String agentRunStatus,
+                String errorCode,
+                AgentContext agentContext,
+                Long workflowId,
+                Throwable cause
+        ) {
+            super(cause.getMessage(), cause);
+            this.agentRunStatus = agentRunStatus;
+            this.errorCode = errorCode;
+            this.agentContext = agentContext;
+            this.workflowId = workflowId;
+        }
+
+        public String agentRunStatus() {
+            return agentRunStatus;
+        }
+
+        public String errorCode() {
+            return errorCode;
+        }
+
+        public AgentContext agentContext() {
+            return agentContext;
+        }
+
+        public Long workflowId() {
+            return workflowId;
+        }
     }
 }

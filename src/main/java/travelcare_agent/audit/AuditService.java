@@ -175,10 +175,11 @@ public class AuditService {
         return recordSystem(sessionId, workflowId, "MEMORY_READ", "AGENT_MEMORY", null, null, evidence);
     }
 
-    public AuditLog recordContextAssembled(Long sessionId, Long workflowId, List<Long> documentIds, List<Long> chunkIds, List<Long> memoryIds) {
+    public AuditLog recordContextAssembled(Long sessionId, Long workflowId, List<Long> documentIds, List<Long> chunkIds, List<Long> memoryIds, List<Long> eventIds) {
         String evidence = "{\"documentIds\":" + toJsonArray(documentIds) 
                 + ",\"chunkIds\":" + toJsonArray(chunkIds) 
-                + ",\"memoryIds\":" + toJsonArray(memoryIds) + "}";
+                + ",\"memoryIds\":" + toJsonArray(memoryIds)
+                + ",\"eventIds\":" + toJsonArray(eventIds) + "}";
         return recordSystem(sessionId, workflowId, "CONTEXT_ASSEMBLED", "AGENT_CONTEXT", null, null, evidence);
     }
 
@@ -204,4 +205,3 @@ public class AuditService {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }
-

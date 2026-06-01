@@ -60,6 +60,7 @@ class SessionControllerTest {
     private final travelcare_agent.workflow.repository.InMemoryWorkflowRepository workflowRepository = new travelcare_agent.workflow.repository.InMemoryWorkflowRepository();
     private final travelcare_agent.workflow.WorkflowTaskService workflowTaskService = org.mockito.Mockito.mock(travelcare_agent.workflow.WorkflowTaskService.class);
     private static final travelcare_agent.agent.ContextAssembler contextAssembler = org.mockito.Mockito.mock(travelcare_agent.agent.ContextAssembler.class);
+    private final travelcare_agent.audit.AuditService auditService = org.mockito.Mockito.mock(travelcare_agent.audit.AuditService.class);
 
     static {
         travelcare_agent.agent.AgentContext dummyContext = new travelcare_agent.agent.AgentContext(
@@ -74,9 +75,10 @@ class SessionControllerTest {
     }
 
     private final travelcare_agent.workflow.repository.WorkflowTaskRepository workflowTaskRepository = org.mockito.Mockito.mock(travelcare_agent.workflow.repository.WorkflowTaskRepository.class);
+    private final travelcare_agent.agentrun.service.AgentRunService agentRunService = org.mockito.Mockito.mock(travelcare_agent.agentrun.service.AgentRunService.class);
 
     private final SessionService sessionService = new SessionService(
-            sessionRepository, eventService, orchestrator(idempotencyService), idempotencyService, workflowRepository, workflowTaskService, workflowTaskRepository, objectMapper
+            sessionRepository, eventService, orchestrator(idempotencyService), idempotencyService, workflowRepository, workflowTaskService, workflowTaskRepository, objectMapper, auditService, agentRunService
     );
     private final MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new SessionController(sessionService, eventService, contextAssembler))
             .setControllerAdvice(new GlobalExceptionHandler())
@@ -219,4 +221,3 @@ class SessionControllerTest {
         );
     }
 }
-

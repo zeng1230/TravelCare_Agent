@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
+import travelcare_agent.audit.AuditService;
 import travelcare_agent.conversation.entity.Session;
 import travelcare_agent.conversation.entity.SessionEvent;
 import travelcare_agent.conversation.repository.SessionEventRepository;
@@ -51,6 +52,9 @@ class ContextAssemblerTest {
 
     @Autowired
     private MemoryService memoryService;
+
+    @Autowired
+    private AuditService auditService;
 
     @Test
     void testAssembleCompleteContext() {
@@ -163,5 +167,34 @@ class ContextAssemblerTest {
             assertThat(mem.getExpiresAt() == null || mem.getExpiresAt().isAfter(LocalDateTime.now())).isTrue();
             assertThat(mem.getMemoryType()).isIn(MemoryType.USER_PREFERENCE, MemoryType.TRIP_CONTEXT);
         }
+    }
+
+    @Test
+    void testAssembleDoesNotWriteAuditLogs() {
+        Long userId = 1002L;
+        Session session = Session.create(userId, "WEB");
+        sessionRepository.save(session);
+
+        sessionEventRepository.save(SessionEvent.create(
+                session.getId(),
+                1,
+                SessionEventType.MESSAGE,
+                SessionEventRole.USER,
+                "Can I refund order ORD-1001?",
+                null
+        ));
+
+        ingestionService.ingest(
+                "Pure Read Refund SOP",
+                "REFUND_SOP",
+                "https://example.com/pure-read-sop",
+                "Refund policy text for ORD-1001 pure read verification.",
+                null,
+                null
+        );
+
+        contextAssembler.assemble(session.getId(), "Refund policy text");
+
+        assertThat(auditService.findBySessionId(session.getId())).isEmpty();
     }
 }

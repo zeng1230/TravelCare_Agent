@@ -2,7 +2,10 @@ package travelcare_agent.conversation.service;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import travelcare_agent.agentrun.entity.AgentRun;
+import travelcare_agent.agentrun.service.AgentRunService;
 import travelcare_agent.agent.AgentOrchestrator;
+import travelcare_agent.audit.AuditService;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.conversation.entity.Session;
@@ -21,6 +24,8 @@ import java.util.List;
 @Service
 public class SessionService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SessionService.class);
+
     private final SessionRepository repository;
     private final SessionEventService eventService;
     private final AgentOrchestrator agentOrchestrator;
@@ -29,6 +34,8 @@ public class SessionService {
     private final travelcare_agent.workflow.WorkflowTaskService workflowTaskService;
     private final travelcare_agent.workflow.repository.WorkflowTaskRepository workflowTaskRepository;
     private final ObjectMapper objectMapper;
+    private final AuditService auditService;
+    private final AgentRunService agentRunService;
 
     public SessionService(
             SessionRepository repository,
@@ -38,7 +45,9 @@ public class SessionService {
             travelcare_agent.workflow.repository.WorkflowRepository workflowRepository,
             travelcare_agent.workflow.WorkflowTaskService workflowTaskService,
             travelcare_agent.workflow.repository.WorkflowTaskRepository workflowTaskRepository,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            AuditService auditService,
+            AgentRunService agentRunService
     ) {
         this.repository = repository;
         this.eventService = eventService;
@@ -48,6 +57,8 @@ public class SessionService {
         this.workflowTaskService = workflowTaskService;
         this.workflowTaskRepository = workflowTaskRepository;
         this.objectMapper = objectMapper;
+        this.auditService = auditService;
+        this.agentRunService = agentRunService;
     }
 
     public CreateSessionResult createSession(Long userId, String channel) {
@@ -134,26 +145,54 @@ public class SessionService {
                 travelcare_agent.workflow.entity.Workflow workflow = travelcare_agent.workflow.entity.Workflow.create(sessionId, "order_refund_inquiry");
                 workflowRepository.save(workflow);
 
-                String payload = "{\"message\":\"" + escape(content) + "\"}";
+                String payload = "{\"message\":\"" + escape(content) + "\",\"userEventId\":" + userEvent.getId() + "}";
                 travelcare_agent.workflow.entity.WorkflowTask task = workflowTaskService.createTask(workflow.getId(), sessionId, "order_refund_inquiry", payload, idempotencyKey);
                 
                 idempotencyService.markSuccess(idempotencyKey, "sendMessage", userEvent.getId());
                 return new SendMessageResult("ACCEPTED", userEvent.getId(), null, null, workflow.getId(), task.getId());
             }
 
-            AgentOrchestrator.AgentReply reply = agentOrchestrator.handle(
-                    new AgentOrchestrator.AgentRequest(sessionId, session.getUserId(), content)
+            AgentRun agentRun = safeStartAgentRun(sessionId, null, null, idempotencyKey, "SYNC_REPLY", "session_service", "SYSTEM");
+            AgentOrchestrator.AgentReply reply;
+            try {
+                reply = agentOrchestrator.handle(
+                        new AgentOrchestrator.AgentRequest(sessionId, session.getUserId(), content)
+                );
+            } catch (AgentOrchestrator.AgentStageException ex) {
+                safeMarkContextFromException(agentRun, List.of(userEvent.getId()), ex);
+                safeMarkFailed(agentRun, ex.agentRunStatus(), ex.errorCode(), ex);
+                throw ex;
+            } catch (RuntimeException ex) {
+                safeMarkFailed(agentRun, "FAILED_CONTEXT", "AGENT_CONTEXT_OR_GENERATION_FAILED", ex);
+                throw ex;
+            }
+
+            safeMarkContextReady(
+                    agentRun,
+                    reply.workflowId(),
+                    List.of(userEvent.getId()),
+                    reply.eventIds(),
+                    reply.retrievalChunkIds(),
+                    reply.memoryIds()
             );
-            SessionEvent workflowEvent = eventService.appendWorkflowRequested(
-                    sessionId,
-                    metadata(
-                            "workflowType", "order_refund_inquiry",
-                            "workflowId", value(reply.workflowId()),
-                            "intent", reply.intent(),
-                            "orderNo", reply.orderNo(),
-                            "workflowStatus", reply.workflowStatus()
-                    )
-            );
+            recordStage3Audit(sessionId, reply.workflowId(), reply.documentIds(), reply.retrievalChunkIds(), reply.memoryIds(), reply.eventIds());
+
+            SessionEvent workflowEvent;
+            try {
+                workflowEvent = eventService.appendWorkflowRequested(
+                        sessionId,
+                        metadata(
+                                "workflowType", "order_refund_inquiry",
+                                "workflowId", value(reply.workflowId()),
+                                "intent", reply.intent(),
+                                "orderNo", reply.orderNo(),
+                                "workflowStatus", reply.workflowStatus()
+                        )
+                );
+            } catch (RuntimeException ex) {
+                safeMarkFailed(agentRun, "FAILED_OUTPUT_EVENT", "WORKFLOW_EVENT_WRITE_FAILED", ex);
+                throw ex;
+            }
 
             java.util.Map<String, Object> metaMap = new java.util.HashMap<>();
             metaMap.put("source", "agent_orchestrator");
@@ -164,12 +203,20 @@ public class SessionService {
                 metaJson = objectMapper.writeValueAsString(metaMap);
             } catch (Exception ignore) {}
 
-            SessionEvent assistantEvent = eventService.appendMessage(
-                    sessionId,
-                    SessionEventRole.ASSISTANT,
-                    reply.answer(),
-                    metaJson
-            );
+            SessionEvent assistantEvent;
+            try {
+                assistantEvent = eventService.appendMessage(
+                        sessionId,
+                        SessionEventRole.ASSISTANT,
+                        reply.answer(),
+                        metaJson
+                );
+            } catch (RuntimeException ex) {
+                safeMarkFailed(agentRun, "FAILED_OUTPUT_EVENT", "ASSISTANT_EVENT_WRITE_FAILED", ex);
+                throw ex;
+            }
+
+            safeMarkSucceeded(agentRun, assistantEvent.getId(), reply.answer());
 
             idempotencyService.markSuccess(idempotencyKey, "sendMessage", assistantEvent.getId());
 
@@ -247,6 +294,126 @@ public class SessionService {
         } catch (NoSuchAlgorithmException ex) {
             throw new IllegalStateException("SHA-256 is not available", ex);
         }
+    }
+
+    private void recordStage3Audit(
+            Long sessionId,
+            Long workflowId,
+            List<Long> documentIds,
+            List<Long> retrievalChunkIds,
+            List<Long> memoryIds,
+            List<Long> eventIds
+    ) {
+        auditService.recordKnowledgeRetrieved(sessionId, workflowId, documentIds, retrievalChunkIds);
+        auditService.recordMemoryRead(sessionId, workflowId, memoryIds);
+        auditService.recordContextAssembled(sessionId, workflowId, documentIds, retrievalChunkIds, memoryIds, eventIds);
+    }
+
+    private AgentRun safeStartAgentRun(
+            Long sessionId,
+            Long workflowId,
+            Long taskId,
+            String correlationId,
+            String runType,
+            String source,
+            String createdBy
+    ) {
+        try {
+            return agentRunService.startRun(sessionId, workflowId, taskId, correlationId, runType, source, createdBy);
+        } catch (RuntimeException ex) {
+            log.warn("Failed to start agent run for session {}", sessionId, ex);
+            return null;
+        }
+    }
+
+    private void safeMarkContextReady(
+            AgentRun agentRun,
+            Long workflowId,
+            List<Long> inputEventIds,
+            List<Long> contextEventIds,
+            List<Long> retrievalChunkIds,
+            List<Long> memoryIds
+    ) {
+        if (agentRun == null) {
+            return;
+        }
+        try {
+            travelcare_agent.workflow.entity.Workflow workflow = workflowId == null
+                    ? null
+                    : workflowRepository.findById(workflowId).orElse(null);
+            if (workflow != null) {
+                agentRunService.attachWorkflow(agentRun.getId(), workflow.getId());
+            }
+            List<Long> finalInputEventIds = contextEventIds == null || contextEventIds.isEmpty()
+                    ? inputEventIds
+                    : contextEventIds;
+            agentRunService.markContextReady(
+                    agentRun.getId(),
+                    finalInputEventIds,
+                    retrievalChunkIds,
+                    memoryIds,
+                    workflowSnapshot(workflow),
+                    AgentRunService.PROMPT_VERSION,
+                    AgentRunService.RESPONSE_TEMPLATE_VERSION
+            );
+        } catch (RuntimeException ex) {
+            log.warn("Failed to mark agent run context ready: {}", agentRun.getId(), ex);
+        }
+    }
+
+    private void safeMarkContextFromException(
+            AgentRun agentRun,
+            List<Long> inputEventIds,
+            AgentOrchestrator.AgentStageException exception
+    ) {
+        if (agentRun == null || exception.agentContext() == null) {
+            return;
+        }
+        List<Long> retrievalChunkIds = exception.agentContext().policySnippets().stream()
+                .map(travelcare_agent.retrieval.service.RetrievalSnippet::chunkId)
+                .toList();
+        List<Long> memoryIds = exception.agentContext().activeMemories().stream()
+                .map(travelcare_agent.memory.entity.AgentMemory::getId)
+                .toList();
+        List<Long> eventIds = exception.agentContext().recentEvents().stream()
+                .map(SessionEvent::getId)
+                .toList();
+        safeMarkContextReady(agentRun, exception.workflowId(), inputEventIds, eventIds, retrievalChunkIds, memoryIds);
+    }
+
+    private void safeMarkSucceeded(AgentRun agentRun, Long outputEventId, String answer) {
+        if (agentRun == null) {
+            return;
+        }
+        try {
+            agentRunService.markSucceeded(agentRun.getId(), outputEventId, answer);
+        } catch (RuntimeException ex) {
+            log.warn("Failed to mark agent run succeeded: {}", agentRun.getId(), ex);
+        }
+    }
+
+    private void safeMarkFailed(AgentRun agentRun, String status, String errorCode, RuntimeException error) {
+        if (agentRun == null) {
+            return;
+        }
+        try {
+            agentRunService.markFailed(agentRun.getId(), status, errorCode, error);
+        } catch (RuntimeException ex) {
+            log.warn("Failed to mark agent run failed: {}", agentRun.getId(), ex);
+        }
+    }
+
+    private String workflowSnapshot(travelcare_agent.workflow.entity.Workflow workflow) {
+        if (workflow == null) {
+            return "{}";
+        }
+        return AgentRunService.workflowSnapshotJson(
+                workflow.getId(),
+                workflow.getStatus() == null ? null : workflow.getStatus().name(),
+                workflow.getCurrentStep(),
+                workflow.getVersion(),
+                workflow.getStateJson()
+        );
     }
 
     public record CreateSessionResult(Long sessionId, String status) {

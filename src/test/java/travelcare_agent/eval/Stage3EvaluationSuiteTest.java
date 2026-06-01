@@ -6,6 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 import travelcare_agent.agent.AgentContext;
 import travelcare_agent.agent.ContextAssembler;
+import travelcare_agent.audit.AuditService;
 import travelcare_agent.conversation.entity.SessionEvent;
 import travelcare_agent.conversation.repository.SessionEventRepository;
 import travelcare_agent.conversation.service.SessionService;
@@ -45,6 +46,9 @@ public class Stage3EvaluationSuiteTest {
 
     @Autowired
     private ContextAssembler contextAssembler;
+
+    @Autowired
+    private AuditService auditService;
 
     @Test
     void testCase1_EligibleRefundWithCitations() {
@@ -88,6 +92,10 @@ public class Stage3EvaluationSuiteTest {
         assertThat(snippets).isNotEmpty();
         Long expectedChunkId = snippets.get(0).chunkId();
         assertThat(metadata).contains(String.valueOf(expectedChunkId));
+
+        assertThat(auditService.findBySessionId(sessionId))
+                .extracting("action")
+                .contains("KNOWLEDGE_RETRIEVED", "MEMORY_READ", "CONTEXT_ASSEMBLED");
     }
 
     @Test

@@ -18,7 +18,6 @@ import travelcare_agent.retrieval.service.RetrievalSnippet;
 import travelcare_agent.workflow.entity.Workflow;
 import travelcare_agent.workflow.repository.WorkflowRepository;
 
-import travelcare_agent.audit.AuditService;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,7 +30,6 @@ public class ContextAssembler {
     private final RefundCaseRepository refundCaseRepository;
     private final RetrievalService retrievalService;
     private final MemoryService memoryService;
-    private final AuditService auditService;
 
     public ContextAssembler(
             SessionRepository sessionRepository,
@@ -39,8 +37,7 @@ public class ContextAssembler {
             WorkflowRepository workflowRepository,
             RefundCaseRepository refundCaseRepository,
             RetrievalService retrievalService,
-            MemoryService memoryService,
-            AuditService auditService
+            MemoryService memoryService
     ) {
         this.sessionRepository = sessionRepository;
         this.sessionEventRepository = sessionEventRepository;
@@ -48,7 +45,6 @@ public class ContextAssembler {
         this.refundCaseRepository = refundCaseRepository;
         this.retrievalService = retrievalService;
         this.memoryService = memoryService;
-        this.auditService = auditService;
     }
 
     public AgentContext assemble(Long sessionId, String query) {
@@ -79,16 +75,6 @@ public class ContextAssembler {
                 List.of(MemoryType.USER_PREFERENCE, MemoryType.TRIP_CONTEXT),
                 10
         );
-
-        Long currentWorkflowId = session.getCurrentWorkflowId();
-        List<Long> docIds = snippets.stream().map(RetrievalSnippet::documentId).distinct().toList();
-        List<Long> chunkIds = snippets.stream().map(RetrievalSnippet::chunkId).distinct().toList();
-        auditService.recordKnowledgeRetrieved(sessionId, currentWorkflowId, docIds, chunkIds);
-
-        List<Long> memoryIds = activeMemories.stream().map(AgentMemory::getId).toList();
-        auditService.recordMemoryRead(sessionId, currentWorkflowId, memoryIds);
-
-        auditService.recordContextAssembled(sessionId, currentWorkflowId, docIds, chunkIds, memoryIds);
 
         return new AgentContext(
                 events,

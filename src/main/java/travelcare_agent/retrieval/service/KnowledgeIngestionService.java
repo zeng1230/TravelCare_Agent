@@ -2,6 +2,7 @@ package travelcare_agent.retrieval.service;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DuplicateKeyException;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.retrieval.entity.KnowledgeChunk;
@@ -63,7 +64,11 @@ public class KnowledgeIngestionService {
         document.setCreatedAt(now);
         document.setUpdatedAt(now);
 
-        documentRepository.save(document);
+        try {
+            documentRepository.save(document);
+        } catch (DuplicateKeyException ex) {
+            throw duplicateDocumentException();
+        }
 
         // 2. Perform paragraph-based chunk splitting
         String[] paragraphs = content.split("\\r?\\n\\r?\\n");
@@ -115,5 +120,9 @@ public class KnowledgeIngestionService {
         } catch (Exception e) {
             throw new RuntimeException("Failed to calculate SHA-256 hash of content", e);
         }
+    }
+
+    private BusinessException duplicateDocumentException() {
+        return new BusinessException(ResultCode.VALIDATION_FAILED, "Duplicate document content detected");
     }
 }

@@ -3,6 +3,7 @@ package travelcare_agent.retrieval;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
@@ -32,6 +33,9 @@ class KnowledgeRetrievalIntegrationTest {
 
     @Autowired
     private MyBatisKnowledgeDocumentMapper documentMapper;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @Test
     void testIngestionAndParagraphChunking() {
@@ -87,6 +91,24 @@ class KnowledgeRetrievalIntegrationTest {
               assertThat(bu.getResultCode()).isEqualTo(ResultCode.VALIDATION_FAILED);
               assertThat(bu.getMessage()).contains("Duplicate document content");
           });
+    }
+
+    @Test
+    void testContentHashHasDatabaseUniqueConstraint() {
+        Integer count = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.statistics
+                WHERE table_schema = DATABASE()
+                  AND table_name = 'knowledge_documents'
+                  AND index_name = 'uk_knowledge_documents_content_hash'
+                  AND non_unique = 0
+                  AND column_name = 'content_hash'
+                """,
+                Integer.class
+        );
+
+        assertThat(count).isEqualTo(1);
     }
 
     @Test
