@@ -6,14 +6,23 @@ import travelcare_agent.audit.repository.AuditLogRepository;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import travelcare_agent.trace.*;
 
 @Service
 public class AuditService {
 
     private final AuditLogRepository auditLogRepository;
+    private final TraceService traceService;
 
     public AuditService(AuditLogRepository auditLogRepository) {
+        this(auditLogRepository, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AuditService(AuditLogRepository auditLogRepository, TraceService traceService) {
         this.auditLogRepository = auditLogRepository;
+        this.traceService = traceService;
     }
 
     public AuditLog recordOrderQuery(
@@ -109,7 +118,7 @@ public class AuditService {
             String afterJson,
             String evidenceJson
     ) {
-        return auditLogRepository.save(AuditLog.system(
+        AuditLog log = AuditLog.system(
                 sessionId,
                 workflowId,
                 action,
@@ -117,7 +126,8 @@ public class AuditService {
                 targetId,
                 afterJson,
                 evidenceJson
-        ));
+        );
+        return saveTraced(log, action);
     }
 
     public AuditLog recordOperator(
@@ -143,7 +153,7 @@ public class AuditService {
         auditLog.setAfterJson(afterJson);
         auditLog.setEvidenceJson(evidenceJson == null ? "{}" : evidenceJson);
         auditLog.setCreatedAt(LocalDateTime.now());
-        return auditLogRepository.save(auditLog);
+        return saveTraced(auditLog, action);
     }
 
     public AuditLog recordMemoryAction(
@@ -203,5 +213,20 @@ public class AuditService {
             return "";
         }
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private AuditLog saveTraced(AuditLog auditLog, String action) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.AUDIT_WRITE);
+        TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
+                : traceService.startSpan(SpanType.AUDIT, action, Map.of("targetType", String.valueOf(auditLog.getTargetType())));
+        if (span.available()) { auditLog.setTraceId(span.traceId()); auditLog.setSpanId(span.spanId()); }
+        try {
+            AuditLog saved = auditLogRepository.save(auditLog);
+            if (traceService != null) traceService.finishSpanSuccess(span, "AUDIT_LOG:" + saved.getId(), Map.of("action", action));
+            return saved;
+        } catch (RuntimeException ex) {
+            if (traceService != null) traceService.finishSpanFailure(span, "AUDIT_WRITE_FAILED", ex, Map.of("action", action));
+            throw ex;
+        }
     }
 }

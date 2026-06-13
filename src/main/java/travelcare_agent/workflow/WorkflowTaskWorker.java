@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import travelcare_agent.agentrun.entity.AgentRun;
 import travelcare_agent.agentrun.service.AgentRunService;
@@ -24,6 +25,7 @@ import travelcare_agent.workflow.repository.WorkflowTaskRepository;
 
 import travelcare_agent.agent.ContextAssembler;
 import travelcare_agent.agent.AgentContext;
+import travelcare_agent.agent.AgentModelService;
 import travelcare_agent.retrieval.service.RetrievalSnippet;
 import travelcare_agent.memory.entity.AgentMemory;
 import travelcare_agent.human.service.HumanReviewService;
@@ -33,6 +35,7 @@ import travelcare_agent.refund.repository.RefundCaseRepository;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import travelcare_agent.trace.*;
 
 @Component
 public class WorkflowTaskWorker {
@@ -55,6 +58,56 @@ public class WorkflowTaskWorker {
     private final RefundCaseRepository refundCaseRepository;
     private final ContextAssembler contextAssembler;
     private final AgentRunService agentRunService;
+    private final AgentModelService agentModelService;
+    private final TraceService traceService;
+
+    @Autowired
+    public WorkflowTaskWorker(
+            WorkflowTaskRepository taskRepository,
+            WorkflowTaskService taskService,
+            LockService lockService,
+            WorkflowEngine workflowEngine,
+            SessionRepository sessionRepository,
+            SessionEventService eventService,
+            MockIntentClassifier intentClassifier,
+            MockResponseGenerator responseGenerator,
+            ObjectMapper objectMapper,
+            AuditService auditService,
+            HumanReviewService humanReviewService,
+            RefundCaseRepository refundCaseRepository,
+            ContextAssembler contextAssembler,
+            AgentRunService agentRunService,
+            AgentModelService agentModelService,
+            TraceService traceService
+    ) {
+        this.taskRepository = taskRepository;
+        this.taskService = taskService;
+        this.lockService = lockService;
+        this.workflowEngine = workflowEngine;
+        this.sessionRepository = sessionRepository;
+        this.eventService = eventService;
+        this.intentClassifier = intentClassifier;
+        this.responseGenerator = responseGenerator;
+        this.objectMapper = objectMapper;
+        this.auditService = auditService;
+        this.humanReviewService = humanReviewService;
+        this.refundCaseRepository = refundCaseRepository;
+        this.contextAssembler = contextAssembler;
+        this.agentRunService = agentRunService;
+        this.agentModelService = agentModelService;
+        this.traceService = traceService;
+    }
+
+    public WorkflowTaskWorker(WorkflowTaskRepository taskRepository, WorkflowTaskService taskService,
+            LockService lockService, WorkflowEngine workflowEngine, SessionRepository sessionRepository,
+            SessionEventService eventService, MockIntentClassifier intentClassifier,
+            MockResponseGenerator responseGenerator, ObjectMapper objectMapper, AuditService auditService,
+            HumanReviewService humanReviewService, RefundCaseRepository refundCaseRepository,
+            ContextAssembler contextAssembler, AgentRunService agentRunService, AgentModelService agentModelService) {
+        this(taskRepository, taskService, lockService, workflowEngine, sessionRepository, eventService,
+                intentClassifier, responseGenerator, objectMapper, auditService, humanReviewService,
+                refundCaseRepository, contextAssembler, agentRunService, agentModelService, null);
+    }
 
     public WorkflowTaskWorker(
             WorkflowTaskRepository taskRepository,
@@ -72,20 +125,9 @@ public class WorkflowTaskWorker {
             ContextAssembler contextAssembler,
             AgentRunService agentRunService
     ) {
-        this.taskRepository = taskRepository;
-        this.taskService = taskService;
-        this.lockService = lockService;
-        this.workflowEngine = workflowEngine;
-        this.sessionRepository = sessionRepository;
-        this.eventService = eventService;
-        this.intentClassifier = intentClassifier;
-        this.responseGenerator = responseGenerator;
-        this.objectMapper = objectMapper;
-        this.auditService = auditService;
-        this.humanReviewService = humanReviewService;
-        this.refundCaseRepository = refundCaseRepository;
-        this.contextAssembler = contextAssembler;
-        this.agentRunService = agentRunService;
+        this(taskRepository, taskService, lockService, workflowEngine, sessionRepository, eventService,
+                intentClassifier, responseGenerator, objectMapper, auditService, humanReviewService,
+                refundCaseRepository, contextAssembler, agentRunService, null, null);
     }
 
     @RabbitListener(queues = RabbitMqConfig.QUEUE_WORKFLOW_TASKS)
@@ -102,6 +144,13 @@ public class WorkflowTaskWorker {
             return;
         }
 
+        String traceId = stringValue(messagePayload.get("traceId"));
+        String parentSpanId = stringValue(messagePayload.get("parentSpanId"));
+        TraceService.SpanHandle asyncSpan = traceService == null ? TraceService.SpanHandle.unavailable()
+                : traceService.startSpan(traceId, parentSpanId, SpanType.ASYNC_TASK, "workflow-task", Map.of("taskId", taskId));
+
+        try (TraceContextHolder.Scope ignored = asyncSpan.available()
+                ? TraceContextHolder.attach(asyncSpan.traceId(), asyncSpan.spanId()) : null) {
         if (task.getStatus() != WorkflowTaskStatus.PENDING && task.getStatus() != WorkflowTaskStatus.DISPATCHED) {
             log.info("Task {} is in status {}, skipping", taskId, task.getStatus());
             return;
@@ -129,6 +178,9 @@ public class WorkflowTaskWorker {
             log.error("Error executing task {}", taskId, e);
             taskService.incrementRetry(taskId, "SYSTEM_ERROR", e.getMessage(), LocalDateTime.now().plusMinutes(1));
         }
+        } finally {
+            if (traceService != null) traceService.finishSpanSuccess(asyncSpan, "WORKFLOW_TASK:" + taskId, Map.of());
+        }
     }
 
     private void executeWorkflow(WorkflowTask task) {
@@ -150,7 +202,12 @@ public class WorkflowTaskWorker {
                     "WORKER"
             );
             
-            MockIntentClassifier.IntentResult intent = intentClassifier.classify(content);
+            List<Long> modelInputEventIds = userEventId == null ? List.of() : List.of(userEventId);
+            MockIntentClassifier.IntentResult intent = agentModelService == null
+                    ? intentClassifier.classify(content)
+                    : agentModelService.classifyIntentAndExtractSlots(
+                            task.getSessionId(), task.getWorkflowId(), modelInputEventIds, content
+                    );
             
             WorkflowEngine.WorkflowCommand command = new WorkflowEngine.WorkflowCommand(
                     session.getId(),
@@ -189,7 +246,12 @@ public class WorkflowTaskWorker {
             recordStage3Audit(session.getId(), task.getWorkflowId(), agentContext);
             String answer;
             try {
-                answer = responseGenerator.generate(intent, result, agentContext);
+                String deterministicAnswer = responseGenerator.generate(intent, result, agentContext);
+                answer = agentModelService == null
+                        ? deterministicAnswer
+                        : agentModelService.generateCustomerAnswer(
+                                task.getSessionId(), task.getWorkflowId(), modelInputEventIds, deterministicAnswer
+                        );
             } catch (RuntimeException ex) {
                 safeMarkFailed(agentRun, "FAILED_GENERATION", "RESPONSE_GENERATION_FAILED", ex);
                 throw ex;
@@ -206,6 +268,8 @@ public class WorkflowTaskWorker {
             } catch (Exception ignore) {}
 
             travelcare_agent.conversation.entity.SessionEvent assistantEvent;
+            TraceService.SpanHandle outputSpan = traceService == null ? TraceService.SpanHandle.unavailable()
+                    : traceService.startSpan(SpanType.OUTPUT, "assistant-response", Map.of("taskId", task.getId()));
             try {
                 assistantEvent = eventService.appendMessage(
                         session.getId(),
@@ -213,11 +277,18 @@ public class WorkflowTaskWorker {
                         answer,
                         metaJson
                 );
+                if (traceService != null) traceService.finishSpanSuccess(outputSpan,
+                        "SESSION_EVENT:" + assistantEvent.getId(), Map.of("answer", answer));
             } catch (RuntimeException ex) {
+                if (traceService != null) traceService.finishSpanFailure(outputSpan,
+                        "ASSISTANT_EVENT_WRITE_FAILED", ex, Map.of());
                 safeMarkFailed(agentRun, "FAILED_OUTPUT_EVENT", "ASSISTANT_EVENT_WRITE_FAILED", ex);
                 throw ex;
             }
             safeMarkSucceeded(agentRun, assistantEvent.getId(), answer);
+            TraceContextHolder.TraceContext trace = TraceContextHolder.current();
+            if (traceService != null && trace != null) traceService.finishRootRunSuccess(
+                    trace.traceId(), task.getWorkflowId(), assistantEvent.getId(), Map.of("answer", answer));
 
             if (result.workflow().getStatus() == travelcare_agent.enums.WorkflowStatus.NEED_HUMAN) {
                 taskService.markTerminalState(task.getId(), WorkflowTaskStatus.NEED_HUMAN);
@@ -268,6 +339,8 @@ public class WorkflowTaskWorker {
         }
         return null;
     }
+
+    private String stringValue(Object value) { return value == null ? null : String.valueOf(value); }
 
     private void recordStage3Audit(Long sessionId, Long workflowId, AgentContext agentContext) {
         List<Long> documentIds = agentContext.policySnippets().stream()

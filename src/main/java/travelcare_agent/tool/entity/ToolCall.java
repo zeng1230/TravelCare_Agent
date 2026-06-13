@@ -24,6 +24,8 @@ public class ToolCall {
     private Integer retryCount;
     private LocalDateTime timeoutAt;
     private LocalDateTime createdAt;
+    private String traceId;
+    private String spanId;
 
     public static ToolCall running(ToolCommandFields fields) {
         ToolCall toolCall = new ToolCall();
@@ -171,4 +173,8 @@ public class ToolCall {
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
     }
+    public String getTraceId() { return traceId; }
+    public void setTraceId(String traceId) { this.traceId = traceId; }
+    public String getSpanId() { return spanId; }
+    public void setSpanId(String spanId) { this.spanId = spanId; }
 }

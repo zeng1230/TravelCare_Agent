@@ -42,6 +42,7 @@ public class SessionEventService {
             String content,
             String metadataJson
     ) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.SESSION_EVENT_WRITE);
         int seqNo = repository.nextSeqNo(sessionId);
         SessionEvent event = SessionEvent.create(sessionId, seqNo, eventType, role, content, metadataJson);
         return repository.save(event);

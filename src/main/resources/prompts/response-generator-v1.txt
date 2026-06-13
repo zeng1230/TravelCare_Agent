@@ -1,0 +1,5 @@
+Generate a customer-facing candidate answer. The backend workflow result and refund policy decision are authoritative.
+Return JSON only:
+{"answer":"string"}
+Input:
+{{input_json}}

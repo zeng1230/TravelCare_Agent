@@ -23,6 +23,13 @@ public class WorkflowTaskService {
 
     @Transactional
     public WorkflowTask createTask(Long workflowId, Long sessionId, String taskType, String payloadJson, String correlationId) {
+        return createTask(workflowId, sessionId, taskType, payloadJson, correlationId, null, null);
+    }
+
+    @Transactional
+    public WorkflowTask createTask(Long workflowId, Long sessionId, String taskType, String payloadJson,
+            String correlationId, String traceId, String parentSpanId) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
         WorkflowTask task = new WorkflowTask();
         task.setWorkflowId(workflowId);
         task.setSessionId(sessionId);
@@ -32,11 +39,12 @@ public class WorkflowTaskService {
         task.setAttemptCount(0);
         task.setMaxAttempts(3);
         WorkflowTask saved = repository.save(task);
-        eventPublisher.publishEvent(new TaskCreatedEvent(saved.getId(), sessionId, workflowId, correlationId));
+        eventPublisher.publishEvent(new TaskCreatedEvent(saved.getId(), sessionId, workflowId, correlationId, traceId, parentSpanId));
         return saved;
     }
 
     public WorkflowTask updateStatus(Long taskId, WorkflowTaskStatus status) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
         WorkflowTask task = repository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
         task.setStatus(status);
@@ -44,6 +52,7 @@ public class WorkflowTaskService {
     }
 
     public WorkflowTask incrementRetry(Long taskId, String errorCode, String errorMessage, LocalDateTime nextRunAt) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
         WorkflowTask task = repository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
         task.setAttemptCount(task.getAttemptCount() + 1);
@@ -58,6 +67,7 @@ public class WorkflowTaskService {
     }
 
     public WorkflowTask markTerminalState(Long taskId, WorkflowTaskStatus terminalStatus) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
         if (terminalStatus != WorkflowTaskStatus.SUCCEEDED && 
             terminalStatus != WorkflowTaskStatus.FAILED && 
             terminalStatus != WorkflowTaskStatus.NEED_HUMAN &&

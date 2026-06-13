@@ -2,7 +2,7 @@ spring:
   application:
     name: TravelCare_Agent
   datasource:
-    url: ${TRAVELCARE_DB_URL:jdbc:mysql://localhost:3307/travelcare_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
+    url: ${TRAVELCARE_DB_URL:jdbc:mysql://localhost:3307/travelcare_agent?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}
     username: root
     password: 123456
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -15,6 +15,13 @@ spring:
       timeout: 3s
 
 travelcare:
+  agent:
+    provider: ${TRAVELCARE_AGENT_PROVIDER:mock}
+    deepseek:
+      base-url: ${TRAVELCARE_AGENT_DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      api-key: ${TRAVELCARE_AGENT_DEEPSEEK_API_KEY:}
+      model: ${TRAVELCARE_AGENT_DEEPSEEK_MODEL:deepseek-chat}
+      timeout-ms: ${TRAVELCARE_AGENT_DEEPSEEK_TIMEOUT_MS:5000}
   jwt:
     issuer: ${TRAVELCARE_JWT_ISSUER:travelcare-agent}
     secret: ${TRAVELCARE_JWT_SECRET:change-me-in-local-env}

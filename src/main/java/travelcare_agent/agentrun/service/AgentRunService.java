@@ -20,6 +20,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import travelcare_agent.trace.TraceContextHolder;
 import java.util.HexFormat;
 
 @Service
@@ -49,6 +50,7 @@ public class AgentRunService {
             String source,
             String createdBy
     ) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.AGENT_RUN_WRITE);
         LocalDateTime now = LocalDateTime.now();
         AgentRun run = new AgentRun();
         run.setSessionId(sessionId);
@@ -66,11 +68,60 @@ public class AgentRunService {
         run.setCreatedBy(createdBy);
         run.setCreatedAt(now);
         run.setUpdatedAt(now);
+        TraceContextHolder.TraceContext trace = TraceContextHolder.current();
+        if (trace != null) { run.setTraceId(trace.traceId()); run.setSpanId(trace.spanId()); }
+        return repository.save(run);
+    }
+
+    @Transactional
+    public AgentRun recordModelCall(
+            Long sessionId,
+            Long workflowId,
+            String runType,
+            String provider,
+            String model,
+            String promptVersion,
+            List<Long> inputEventIds,
+            String requestJson,
+            String responseJson,
+            Integer inputTokens,
+            Integer outputTokens,
+            long latencyMs,
+            String status,
+            String errorCode
+    ) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.AGENT_RUN_WRITE);
+        LocalDateTime now = LocalDateTime.now();
+        AgentRun run = new AgentRun();
+        run.setSessionId(sessionId);
+        run.setWorkflowId(workflowId);
+        run.setRunType(runType);
+        run.setSource("agent_model_service");
+        run.setProvider(provider);
+        run.setModel(model);
+        run.setPromptVersion(promptVersion);
+        run.setResponseTemplateVersion(promptVersion);
+        run.setInputEventIdsJson(toJsonArray(inputEventIds));
+        run.setRetrievalChunkIdsJson("[]");
+        run.setMemoryIdsJson("[]");
+        run.setRequestJson(requestJson);
+        run.setResponseJson(responseJson);
+        run.setInputTokens(inputTokens);
+        run.setOutputTokens(outputTokens);
+        run.setLatencyMs(Math.max(0L, latencyMs));
+        run.setStatus(status);
+        run.setErrorCode(errorCode);
+        run.setCreatedBy("AGENT_PROVIDER");
+        run.setCreatedAt(now);
+        run.setUpdatedAt(now);
+        TraceContextHolder.TraceContext trace = TraceContextHolder.current();
+        if (trace != null) { run.setTraceId(trace.traceId()); run.setSpanId(trace.spanId()); }
         return repository.save(run);
     }
 
     @Transactional
     public AgentRun attachWorkflow(Long agentRunId, Long workflowId) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.AGENT_RUN_WRITE);
         AgentRun run = requireRun(agentRunId);
         run.setWorkflowId(workflowId);
         return repository.save(run);
@@ -86,6 +137,7 @@ public class AgentRunService {
             String promptVersion,
             String responseTemplateVersion
     ) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.AGENT_RUN_WRITE);
         AgentRun run = requireRun(agentRunId);
         run.setInputEventIdsJson(toJsonArray(inputEventIds));
         run.setRetrievalChunkIdsJson(toJsonArray(retrievalChunkIds));
@@ -101,6 +153,7 @@ public class AgentRunService {
 
     @Transactional
     public AgentRun markSucceeded(Long agentRunId, Long outputEventId, String answer) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.AGENT_RUN_WRITE);
         AgentRun run = requireRun(agentRunId);
         if (isTerminal(run)) {
             return run;
@@ -116,6 +169,7 @@ public class AgentRunService {
 
     @Transactional
     public AgentRun markFailed(Long agentRunId, String status, String errorCode, Throwable error) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.AGENT_RUN_WRITE);
         AgentRun run = requireRun(agentRunId);
         if (isTerminal(run)) {
             return run;

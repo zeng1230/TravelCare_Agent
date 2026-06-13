@@ -39,7 +39,7 @@ public class GlobalExceptionHandler {
 
     private HttpStatus resolveStatus(ResultCode resultCode) {
         return switch (resultCode) {
-            case BAD_REQUEST, VALIDATION_FAILED, IDEMPOTENCY_KEY_CONFLICT -> HttpStatus.BAD_REQUEST;
+            case BAD_REQUEST, VALIDATION_FAILED, IDEMPOTENCY_KEY_CONFLICT, DRY_RUN_NOT_READY -> HttpStatus.BAD_REQUEST;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case NOT_FOUND, ORDER_NOT_FOUND -> HttpStatus.NOT_FOUND;

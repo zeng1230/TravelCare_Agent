@@ -9,21 +9,69 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.Map;
+import travelcare_agent.trace.*;
 
 @Component
 public class RefundEligibilityPolicy {
 
     private final Clock clock;
+    private final TraceService traceService;
 
     public RefundEligibilityPolicy() {
-        this(Clock.systemDefaultZone());
+        this(Clock.systemDefaultZone(), null);
     }
 
     public RefundEligibilityPolicy(Clock clock) {
+        this(clock, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RefundEligibilityPolicy(TraceService traceService) {
+        this(Clock.systemDefaultZone(), traceService);
+    }
+
+    private RefundEligibilityPolicy(Clock clock, TraceService traceService) {
         this.clock = clock;
+        this.traceService = traceService;
     }
 
     public RefundEligibilityDecision evaluate(OrderRefundInquiryWorkflow.OrderSnapshot order, Long currentUserId) {
+        return evaluateAt(order, currentUserId, LocalDateTime.now(clock));
+    }
+
+    public RefundEligibilityDecision evaluateAt(OrderRefundInquiryWorkflow.OrderSnapshot order, Long currentUserId,
+            LocalDateTime evaluatedAt) {
+        TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
+                : traceService.startSpan(SpanType.POLICY, "refund-eligibility", Map.of("orderNo", order.orderNo()));
+        try {
+            if (traceService != null) {
+                Map<String, Object> inputSnapshot = new java.util.LinkedHashMap<>();
+                inputSnapshot.put("currentUserId", currentUserId);
+                inputSnapshot.put("evaluatedAt", evaluatedAt);
+                inputSnapshot.put("order", order);
+                traceService.recordCurrentSnapshot(TraceSnapshotType.POLICY_INPUT,
+                        "POLICY", "refund-eligibility", inputSnapshot);
+            }
+            RefundEligibilityDecision result = evaluateInternal(order, currentUserId, evaluatedAt);
+            if (traceService != null) traceService.recordCurrentSnapshot(TraceSnapshotType.POLICY_DECISION,
+                    "POLICY", "refund-eligibility", Map.of(
+                            "decision", result.status().name(),
+                            "reason", result.reason(),
+                            "refundAmount", result.refundAmount() == null ? "" : result.refundAmount(),
+                            "policyResult", result.policyResultJson()
+                    ));
+            if (traceService != null) traceService.finishSpanSuccess(span, "POLICY_DECISION:" + result.status().name(),
+                    Map.of("decision", result.status().name(), "reason", result.reason()));
+            return result;
+        } catch (RuntimeException ex) {
+            if (traceService != null) traceService.finishSpanFailure(span, "POLICY_FAILED", ex, Map.of());
+            throw ex;
+        }
+    }
+
+    private RefundEligibilityDecision evaluateInternal(OrderRefundInquiryWorkflow.OrderSnapshot order, Long currentUserId,
+            LocalDateTime evaluatedAt) {
         if (currentUserId == null || !currentUserId.equals(order.userId())) {
             return decision(
                     RefundCaseStatus.NEED_HUMAN,
@@ -57,7 +105,7 @@ public class RefundEligibilityPolicy {
                     "NOT_EVALUATED"
             );
         }
-        long hoursUntilDeparture = ChronoUnit.HOURS.between(LocalDateTime.now(clock), order.departureTime());
+        long hoursUntilDeparture = ChronoUnit.HOURS.between(evaluatedAt, order.departureTime());
         if (hoursUntilDeparture <= 24) {
             return decision(
                     RefundCaseStatus.INELIGIBLE,

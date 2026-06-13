@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.Map;
+import travelcare_agent.trace.*;
 
 @Service
 public class RetrievalService {
@@ -18,9 +20,16 @@ public class RetrievalService {
     private static final Logger log = LoggerFactory.getLogger(RetrievalService.class);
 
     private final KnowledgeChunkRepository chunkRepository;
+    private final TraceService traceService;
 
     public RetrievalService(KnowledgeChunkRepository chunkRepository) {
+        this(chunkRepository, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RetrievalService(KnowledgeChunkRepository chunkRepository, TraceService traceService) {
         this.chunkRepository = chunkRepository;
+        this.traceService = traceService;
     }
 
     public List<RetrievalSnippet> retrieve(RetrievalQuery query) {
@@ -29,6 +38,8 @@ public class RetrievalService {
         }
 
         String queryText = query.query().trim();
+        TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
+                : traceService.startSpan(SpanType.RETRIEVAL, "knowledge-retrieval", Map.of("query", queryText));
         List<String> docTypes = query.docTypes();
         int limit = query.limit() <= 0 ? 5 : query.limit();
         LocalDateTime now = LocalDateTime.now();
@@ -39,6 +50,8 @@ public class RetrievalService {
 
         // 2. Robust Search Fallback: if FULLTEXT yields zero results, fall back to programmatic wildcard LIKE matching
         if (chunks == null || chunks.isEmpty()) {
+            if (traceService != null) traceService.recordEvent(span.traceId(), span.spanId(), TraceEventType.FALLBACK,
+                    "fulltext-to-like", Map.of());
             log.info("FULLTEXT search returned zero results. Falling back to programmatic LIKE wildcard search.");
             List<String> keywords = Arrays.stream(queryText.split("\\s+"))
                     .map(String::trim)
@@ -51,11 +64,14 @@ public class RetrievalService {
         }
 
         if (chunks == null) {
+            if (traceService != null) traceService.recordCurrentSnapshot(TraceSnapshotType.RETRIEVAL_SUMMARY,
+                    "RETRIEVAL_QUERY", null, Map.of("query", queryText, "results", List.of()));
+            if (traceService != null) traceService.finishSpanSuccess(span, null, Map.of("hitCount", 0));
             return new ArrayList<>();
         }
 
         // 3. Map chunks to RetrievalSnippet including source citations metadata
-        return chunks.stream()
+        List<RetrievalSnippet> result = chunks.stream()
                 .map(chunk -> new RetrievalSnippet(
                         chunk.getDocumentId(),
                         chunk.getId(),
@@ -65,5 +81,23 @@ public class RetrievalService {
                         1.0 // Simple default score
                 ))
                 .collect(Collectors.toList());
+        if (traceService != null) traceService.recordCurrentSnapshot(TraceSnapshotType.RETRIEVAL_SUMMARY,
+                "RETRIEVAL_QUERY", null, Map.of(
+                        "query", queryText,
+                        "results", result.stream().map(RetrievalService::snapshotSummary).toList()
+                ));
+        if (traceService != null) traceService.finishSpanSuccess(span, null, Map.of(
+                "hitCount", result.size(), "chunkIds", result.stream().map(RetrievalSnippet::chunkId).toList()));
+        return result;
+    }
+
+    private static Map<String, Object> snapshotSummary(RetrievalSnippet value) {
+        Map<String, Object> summary = new java.util.LinkedHashMap<>();
+        summary.put("documentId", value.documentId());
+        summary.put("chunkId", value.chunkId());
+        summary.put("title", value.title());
+        summary.put("sourceUri", value.sourceUri());
+        summary.put("score", value.score());
+        return summary;
     }
 }

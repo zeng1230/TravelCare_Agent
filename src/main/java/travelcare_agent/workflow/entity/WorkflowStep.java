@@ -20,6 +20,8 @@ public class WorkflowStep {
     private String errorCode;
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
+    private String traceId;
+    private String spanId;
 
     public static WorkflowStep start(Long workflowId, String stepName, String inputJson) {
         WorkflowStep step = new WorkflowStep();
@@ -116,4 +118,8 @@ public class WorkflowStep {
     public void setFinishedAt(LocalDateTime finishedAt) {
         this.finishedAt = finishedAt;
     }
+    public String getTraceId() { return traceId; }
+    public void setTraceId(String traceId) { this.traceId = traceId; }
+    public String getSpanId() { return spanId; }
+    public void setSpanId(String spanId) { this.spanId = spanId; }
 }

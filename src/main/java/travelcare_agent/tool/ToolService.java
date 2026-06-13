@@ -10,6 +10,8 @@ import travelcare_agent.tool.repository.ToolCallRepository;
 
 import java.time.LocalDateTime;
 import java.util.function.Supplier;
+import java.util.Map;
+import travelcare_agent.trace.*;
 
 @Service
 public class ToolService {
@@ -17,10 +19,15 @@ public class ToolService {
     private final ToolCallRepository toolCallRepository;
     private final IdempotencyService idempotencyService;
     private final ObjectMapper objectMapper;
+    private final TraceService traceService;
 
     @Autowired
+    public ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService, TraceService traceService) {
+        this(toolCallRepository, idempotencyService, new ObjectMapper().findAndRegisterModules(), traceService);
+    }
+
     public ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService) {
-        this(toolCallRepository, idempotencyService, new ObjectMapper().findAndRegisterModules());
+        this(toolCallRepository, idempotencyService, new ObjectMapper().findAndRegisterModules(), null);
     }
 
     ToolService(
@@ -28,12 +35,23 @@ public class ToolService {
             IdempotencyService idempotencyService,
             ObjectMapper objectMapper
     ) {
+        this(toolCallRepository, idempotencyService, objectMapper, null);
+    }
+
+    ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService,
+            ObjectMapper objectMapper, TraceService traceService) {
         this.toolCallRepository = toolCallRepository;
         this.idempotencyService = idempotencyService;
         this.objectMapper = objectMapper;
+        this.traceService = traceService;
     }
 
     public <T> ToolExecution<T> execute(ToolCommand command, Class<T> resultType, Supplier<T> action) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.TOOL_CALL_WRITE);
+        TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
+                : traceService.startSpan(SpanType.TOOL, command.toolName(), Map.of("workflowId", command.workflowId()));
+        if (traceService != null) traceService.recordCurrentSnapshot(TraceSnapshotType.TOOL_REQUEST,
+                "TOOL", command.toolName(), snapshotMap(command.toolName(), command.workflowId(), command.requestJson(), null, null, null));
         IdempotencyService.Decision decision = idempotencyService.begin(
                 "tool_call",
                 command.idempotencyKey(),
@@ -42,10 +60,17 @@ public class ToolService {
         if (decision.reuse()) {
             ToolCall cached = toolCallRepository.findById(decision.resultId())
                     .orElseThrow(() -> new IllegalStateException("Cached tool call not found: " + decision.resultId()));
+            if (traceService != null) {
+                traceService.recordCurrentSnapshot(TraceSnapshotType.TOOL_RESULT, "TOOL_CALL",
+                        String.valueOf(cached.getId()), snapshotMap(command.toolName(), command.workflowId(), null,
+                                cached.getStatus().name(), true, deserialize(cached.getResponseJson(), resultType)));
+                traceService.recordEvent(span.traceId(), span.spanId(), TraceEventType.IDEMPOTENCY_REUSED, command.toolName(), Map.of("toolCallId", cached.getId()));
+                traceService.finishSpanSuccess(span, "TOOL_CALL:" + cached.getId(), Map.of("status", cached.getStatus().name(), "reused", true));
+            }
             return new ToolExecution<>(cached, deserialize(cached.getResponseJson(), resultType), true);
         }
 
-        ToolCall toolCall = toolCallRepository.save(ToolCall.running(new ToolCall.ToolCommandFields(
+        ToolCall pending = ToolCall.running(new ToolCall.ToolCommandFields(
                 command.sessionId(),
                 command.workflowId(),
                 command.stepId(),
@@ -54,23 +79,31 @@ public class ToolService {
                 command.requestHash(),
                 command.requestJson(),
                 command.timeoutAt()
-        )));
+        ));
+        if (span.available()) { pending.setTraceId(span.traceId()); pending.setSpanId(span.spanId()); }
+        ToolCall toolCall = toolCallRepository.save(pending);
 
         try {
             T result = action.get();
             toolCall.succeed(serialize(result));
             toolCallRepository.save(toolCall);
             idempotencyService.markSuccess(command.idempotencyKey(), "tool_call", toolCall.getId());
+            if (traceService != null) traceService.recordCurrentSnapshot(TraceSnapshotType.TOOL_RESULT,
+                    "TOOL_CALL", String.valueOf(toolCall.getId()), snapshotMap(command.toolName(), command.workflowId(), null,
+                            toolCall.getStatus().name(), false, result));
+            if (traceService != null) traceService.finishSpanSuccess(span, "TOOL_CALL:" + toolCall.getId(), Map.of("status", toolCall.getStatus().name()));
             return new ToolExecution<>(toolCall, result, false);
         } catch (BusinessException ex) {
             toolCall.fail(errorJson(ex.getResultCode().code(), ex.getMessage()));
             toolCallRepository.save(toolCall);
             idempotencyService.markFailed(command.idempotencyKey());
+            if (traceService != null) traceService.finishSpanFailure(span, ex.getResultCode().code(), ex, Map.of("toolCallId", toolCall.getId()));
             throw ex;
         } catch (RuntimeException ex) {
             toolCall.unknown(errorJson("UNKNOWN_TOOL_ERROR", ex.getMessage()));
             toolCallRepository.save(toolCall);
             idempotencyService.markFailed(command.idempotencyKey());
+            if (traceService != null) traceService.finishSpanFailure(span, "UNKNOWN_TOOL_ERROR", ex, Map.of("toolCallId", toolCall.getId()));
             throw ex;
         }
     }
@@ -97,6 +130,18 @@ public class ToolService {
         } catch (JsonProcessingException ex) {
             return "{\"code\":\"" + code + "\"}";
         }
+    }
+
+    private static Map<String, Object> snapshotMap(String toolName, Long workflowId, String request,
+            String status, Boolean reused, Object result) {
+        Map<String, Object> value = new java.util.LinkedHashMap<>();
+        value.put("toolName", toolName);
+        if (workflowId != null) value.put("workflowId", workflowId);
+        if (request != null) value.put("request", request);
+        if (status != null) value.put("status", status);
+        if (reused != null) value.put("reused", reused);
+        value.put("result", result);
+        return value;
     }
 
     public record ToolCommand(

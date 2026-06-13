@@ -31,6 +31,7 @@ public class WorkflowTaskPublisher {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onTaskCreated(TaskCreatedEvent event) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.RABBITMQ_PUBLISH);
         Long taskId = event.getTaskId();
         Long sessionId = event.getSessionId();
         Long workflowId = event.getWorkflowId();
@@ -40,6 +41,8 @@ public class WorkflowTaskPublisher {
             Map<String, Object> payload = new HashMap<>();
             payload.put("taskId", taskId);
             payload.put("correlationId", correlationId);
+            payload.put("traceId", event.getTraceId());
+            payload.put("parentSpanId", event.getParentSpanId());
 
             rabbitTemplate.convertAndSend(
                     RabbitMqConfig.EXCHANGE_WORKFLOW,

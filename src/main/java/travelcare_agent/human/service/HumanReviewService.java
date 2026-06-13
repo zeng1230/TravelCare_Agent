@@ -21,6 +21,8 @@ import travelcare_agent.common.result.ResultCode;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.Map;
+import travelcare_agent.trace.*;
 
 @Service
 public class HumanReviewService {
@@ -30,19 +32,27 @@ public class HumanReviewService {
     private final AuditService auditService;
     private final WorkflowRepository workflowRepository;
     private final RefundCaseRepository refundCaseRepository;
+    private final TraceService traceService;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public HumanReviewService(
             HumanReviewCaseRepository repository,
             SessionEventService eventService,
             AuditService auditService,
             WorkflowRepository workflowRepository,
-            RefundCaseRepository refundCaseRepository
+            RefundCaseRepository refundCaseRepository,
+            TraceService traceService
     ) {
         this.repository = repository;
         this.eventService = eventService;
         this.auditService = auditService;
         this.workflowRepository = workflowRepository;
         this.refundCaseRepository = refundCaseRepository;
+        this.traceService = traceService;
+    }
+    public HumanReviewService(HumanReviewCaseRepository repository, SessionEventService eventService,
+            AuditService auditService, WorkflowRepository workflowRepository, RefundCaseRepository refundCaseRepository) {
+        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null);
     }
 
     @Transactional
@@ -55,6 +65,11 @@ public class HumanReviewService {
             String reasonCode,
             String evidenceJson
     ) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.HUMAN_REVIEW_WRITE);
+        TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
+                : traceService.startSpan(SpanType.HUMAN_REVIEW, "create-human-review", Map.of("reasonCode", reasonCode));
+        if (traceService != null) traceService.recordEvent(span.traceId(), span.spanId(), TraceEventType.HANDOFF_REQUIRED,
+                "handoff-required", Map.of("reasonCode", reasonCode));
         HumanReviewCase hrCase = new HumanReviewCase();
         hrCase.setSessionId(sessionId);
         hrCase.setWorkflowId(workflowId);
@@ -81,11 +96,13 @@ public class HumanReviewService {
                 "{\"reasonCode\":\"" + reasonCode + "\"}"
         );
 
+        if (traceService != null) traceService.finishSpanSuccess(span, "HUMAN_REVIEW_CASE:" + hrCase.getId(), Map.of("status", hrCase.getStatus().name()));
         return hrCase;
     }
 
     @Transactional
     public HumanReviewCase assignCase(Long caseId, String operatorId) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.HUMAN_REVIEW_WRITE);
         HumanReviewCase hrCase = repository.findById(caseId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review case not found: " + caseId));
 
@@ -112,6 +129,7 @@ public class HumanReviewService {
 
     @Transactional
     public HumanReviewCase resolveCase(Long caseId, String resolution, String resolutionNote, String operatorId) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.HUMAN_REVIEW_WRITE);
         HumanReviewCase hrCase = repository.findById(caseId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review case not found: " + caseId));
 

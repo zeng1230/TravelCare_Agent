@@ -14,15 +14,70 @@ import java.util.List;
 @Component
 public class EvaluationReportWriter {
 
-    private static final Path REPORT_PATH = Path.of("target", "evaluation", "evaluation_report.md");
+    private static final Object LOCK = new Object();
+    private static final java.util.Set<Path> INITIALIZED_DIRECTORIES = new java.util.HashSet<>();
+    private final Path reportPath;
+
+    public EvaluationReportWriter() {
+        this(Path.of("target", "evaluation", "evaluation_report.md"));
+    }
+
+    EvaluationReportWriter(Path reportPath) {
+        this.reportPath = reportPath;
+    }
 
     public Path write(List<EvaluationCaseResult> results, String regressionStatus) {
+        return write("default", results, regressionStatus);
+    }
+
+    public Path write(String suiteId, List<EvaluationCaseResult> results, String regressionStatus) {
+        String safeSuite = suiteId == null || suiteId.isBlank() ? "default" : suiteId.replaceAll("[^A-Za-z0-9_-]", "_");
+        Path suitePath = reportPath.getParent().resolve(safeSuite + "_report.md");
+        synchronized (LOCK) {
         try {
-            Files.createDirectories(REPORT_PATH.getParent());
-            Files.writeString(REPORT_PATH, markdown(results, regressionStatus));
-            return REPORT_PATH;
+            Files.createDirectories(reportPath.getParent());
+            initializeOutputDirectory();
+            atomicWrite(suitePath, markdown(results, regressionStatus));
+            rebuildAggregate();
+            return suitePath;
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to write evaluation report", ex);
+        }
+        }
+    }
+
+    private void initializeOutputDirectory() throws IOException {
+        Path directory = reportPath.getParent().toAbsolutePath().normalize();
+        if (!INITIALIZED_DIRECTORIES.add(directory)) return;
+        try (var files = Files.list(reportPath.getParent())) {
+            for (Path path : files.filter(path -> path.getFileName().toString().endsWith("_report.md")).toList()) {
+                Files.deleteIfExists(path);
+            }
+        }
+        Files.deleteIfExists(reportPath);
+    }
+
+    private void rebuildAggregate() throws IOException {
+        StringBuilder aggregate = new StringBuilder("# TravelCare Agent Aggregated Evaluation Report\n\n");
+        try (var files = Files.list(reportPath.getParent())) {
+            for (Path path : files.filter(path -> path.getFileName().toString().endsWith("_report.md"))
+                    .filter(path -> !path.equals(reportPath))
+                    .sorted().toList()) {
+                aggregate.append("## Suite: ").append(path.getFileName().toString().replace("_report.md", ""))
+                        .append("\n\n").append(Files.readString(path)).append("\n");
+            }
+        }
+        atomicWrite(reportPath, aggregate.toString());
+    }
+
+    private void atomicWrite(Path target, String content) throws IOException {
+        Path temporary = target.resolveSibling(target.getFileName() + ".tmp");
+        Files.writeString(temporary, content);
+        try {
+            Files.move(temporary, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException ex) {
+            Files.move(temporary, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -47,6 +102,16 @@ public class EvaluationReportWriter {
         report.append("- AgentRun success count: ").append(metrics.agentRunSuccessCount()).append("\n");
         report.append("- AgentRun failed count: ").append(metrics.agentRunFailedCount()).append("\n");
         report.append("- Regression status: ").append(metrics.regressionStatus()).append("\n\n");
+
+        report.append("## Agent Runs\n");
+        for (EvaluationCaseResult result : results) {
+            report.append("- ").append(result.caseId())
+                    .append(": agentRunId=").append(value(result.agentRunId()))
+                    .append(", status=").append(value(result.agentRunStatus()))
+                    .append(", replay=").append(value(result.replayEndpoint()))
+                    .append("\n");
+        }
+        report.append("\n");
 
         report.append("## Cases\n");
         for (EvaluationCaseResult result : results) {

@@ -2,6 +2,7 @@ package travelcare_agent.agent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import travelcare_agent.enums.WorkflowStatus;
 import travelcare_agent.human.service.HumanReviewService;
@@ -25,6 +26,28 @@ public class AgentOrchestrator {
     private final RefundCaseRepository refundCaseRepository;
     private final ObjectMapper objectMapper;
     private final ContextAssembler contextAssembler;
+    private final AgentModelService agentModelService;
+
+    @Autowired
+    public AgentOrchestrator(
+            MockIntentClassifier intentClassifier,
+            MockResponseGenerator responseGenerator,
+            WorkflowEngine workflowEngine,
+            HumanReviewService humanReviewService,
+            RefundCaseRepository refundCaseRepository,
+            ObjectMapper objectMapper,
+            ContextAssembler contextAssembler,
+            AgentModelService agentModelService
+    ) {
+        this.intentClassifier = intentClassifier;
+        this.responseGenerator = responseGenerator;
+        this.workflowEngine = workflowEngine;
+        this.humanReviewService = humanReviewService;
+        this.refundCaseRepository = refundCaseRepository;
+        this.objectMapper = objectMapper;
+        this.contextAssembler = contextAssembler;
+        this.agentModelService = agentModelService;
+    }
 
     public AgentOrchestrator(
             MockIntentClassifier intentClassifier,
@@ -35,13 +58,8 @@ public class AgentOrchestrator {
             ObjectMapper objectMapper,
             ContextAssembler contextAssembler
     ) {
-        this.intentClassifier = intentClassifier;
-        this.responseGenerator = responseGenerator;
-        this.workflowEngine = workflowEngine;
-        this.humanReviewService = humanReviewService;
-        this.refundCaseRepository = refundCaseRepository;
-        this.objectMapper = objectMapper;
-        this.contextAssembler = contextAssembler;
+        this(intentClassifier, responseGenerator, workflowEngine, humanReviewService, refundCaseRepository,
+                objectMapper, contextAssembler, null);
     }
 
     public AgentReply handle(AgentRequest request) {
@@ -52,7 +70,14 @@ public class AgentOrchestrator {
             throw new AgentStageException("FAILED_CONTEXT", "CONTEXT_ASSEMBLY_FAILED", null, null, ex);
         }
 
-        MockIntentClassifier.IntentResult intent = intentClassifier.classify(request.message());
+        List<Long> contextEventIds = agentContext.recentEvents().stream()
+                .map(SessionEvent::getId)
+                .toList();
+        MockIntentClassifier.IntentResult intent = agentModelService == null
+                ? intentClassifier.classify(request.message())
+                : agentModelService.classifyIntentAndExtractSlots(
+                        request.sessionId(), null, contextEventIds, request.message()
+                );
         WorkflowEngine.WorkflowResult workflowResult;
         try {
             workflowResult = workflowEngine.start(
@@ -96,7 +121,12 @@ public class AgentOrchestrator {
 
         String answer;
         try {
-            answer = responseGenerator.generate(intent, workflowResult, agentContext);
+            String deterministicAnswer = responseGenerator.generate(intent, workflowResult, agentContext);
+            answer = agentModelService == null
+                    ? deterministicAnswer
+                    : agentModelService.generateCustomerAnswer(
+                            request.sessionId(), workflowResult.workflow().getId(), contextEventIds, deterministicAnswer
+                    );
         } catch (RuntimeException ex) {
             throw new AgentStageException("FAILED_GENERATION", "RESPONSE_GENERATION_FAILED", agentContext, workflowResult.workflow().getId(), ex);
         }

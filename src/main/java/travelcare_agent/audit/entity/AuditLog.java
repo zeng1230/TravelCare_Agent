@@ -23,6 +23,8 @@ public class AuditLog {
     private String afterJson;
     private String evidenceJson;
     private LocalDateTime createdAt;
+    private String traceId;
+    private String spanId;
 
     public static AuditLog system(
             Long sessionId,
@@ -151,4 +153,8 @@ public class AuditLog {
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
     }
+    public String getTraceId() { return traceId; }
+    public void setTraceId(String traceId) { this.traceId = traceId; }
+    public String getSpanId() { return spanId; }
+    public void setSpanId(String spanId) { this.spanId = spanId; }
 }

@@ -1,0 +1,4 @@
+Classify the customer message. Return JSON only:
+{"intent":"REFUND_INQUIRY|ORDER_QUERY","orderNo":"string or null"}
+Input:
+{{input_json}}

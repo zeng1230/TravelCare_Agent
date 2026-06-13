@@ -32,6 +32,7 @@ public class MockOrderAdapter implements OrderAdapter {
 
     @Override
     public Optional<OrderSnapshot> getOrder(Long orderId, String orderNo, Long userId) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.EXTERNAL_ADAPTER_CALL);
         return lookup.find(orderId, orderNo, userId);
     }
 

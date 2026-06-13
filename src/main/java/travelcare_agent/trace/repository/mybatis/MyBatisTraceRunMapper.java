@@ -1,0 +1,1 @@
+package travelcare_agent.trace.repository.mybatis; import com.baomidou.mybatisplus.core.mapper.BaseMapper; import org.apache.ibatis.annotations.Mapper; import travelcare_agent.trace.entity.TraceRun; @Mapper public interface MyBatisTraceRunMapper extends BaseMapper<TraceRun>{}

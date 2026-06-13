@@ -22,6 +22,7 @@ public class IdempotencyService {
     }
 
     public Decision begin(String scope, String idempotencyKey, String requestHash) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.IDEMPOTENCY_WRITE);
         Optional<IdempotencyKey> existing = repository.findByKey(idempotencyKey);
         if (existing.isEmpty()) {
             repository.save(IdempotencyKey.running(
@@ -44,6 +45,7 @@ public class IdempotencyService {
     }
 
     public void markSuccess(String idempotencyKey, String resultType, Long resultId) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.IDEMPOTENCY_WRITE);
         IdempotencyKey key = repository.findByKey(idempotencyKey)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Idempotency key not found"));
         key.succeed(resultType, resultId);
@@ -51,6 +53,7 @@ public class IdempotencyService {
     }
 
     public void markFailed(String idempotencyKey) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.IDEMPOTENCY_WRITE);
         repository.findByKey(idempotencyKey).ifPresent(key -> {
             key.fail();
             repository.save(key);

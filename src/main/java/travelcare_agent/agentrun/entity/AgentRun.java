@@ -17,6 +17,12 @@ public class AgentRun {
     private String correlationId;
     private String runType;
     private String source;
+    private String provider;
+    private String model;
+    private String requestJson;
+    private String responseJson;
+    private Integer inputTokens;
+    private Integer outputTokens;
     private String inputEventIdsJson;
     private String retrievalChunkIdsJson;
     private String memoryIdsJson;
@@ -34,6 +40,8 @@ public class AgentRun {
     private String createdBy;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private String traceId;
+    private String spanId;
 
     public Long getId() {
         return id;
@@ -89,6 +97,54 @@ public class AgentRun {
 
     public void setSource(String source) {
         this.source = source;
+    }
+
+    public String getProvider() {
+        return provider;
+    }
+
+    public void setProvider(String provider) {
+        this.provider = provider;
+    }
+
+    public String getModel() {
+        return model;
+    }
+
+    public void setModel(String model) {
+        this.model = model;
+    }
+
+    public String getRequestJson() {
+        return requestJson;
+    }
+
+    public void setRequestJson(String requestJson) {
+        this.requestJson = requestJson;
+    }
+
+    public String getResponseJson() {
+        return responseJson;
+    }
+
+    public void setResponseJson(String responseJson) {
+        this.responseJson = responseJson;
+    }
+
+    public Integer getInputTokens() {
+        return inputTokens;
+    }
+
+    public void setInputTokens(Integer inputTokens) {
+        this.inputTokens = inputTokens;
+    }
+
+    public Integer getOutputTokens() {
+        return outputTokens;
+    }
+
+    public void setOutputTokens(Integer outputTokens) {
+        this.outputTokens = outputTokens;
     }
 
     public String getInputEventIdsJson() {
@@ -226,4 +282,8 @@ public class AgentRun {
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
     }
+    public String getTraceId() { return traceId; }
+    public void setTraceId(String traceId) { this.traceId = traceId; }
+    public String getSpanId() { return spanId; }
+    public void setSpanId(String spanId) { this.spanId = spanId; }
 }

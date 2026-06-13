@@ -12,6 +12,8 @@ public enum ResultCode {
     VALIDATION_FAILED("VALIDATION_FAILED", "Validation failed"),
     WORKFLOW_FAILED("WORKFLOW_FAILED", "Workflow failed"),
     TOOL_CALL_FAILED("TOOL_CALL_FAILED", "Tool call failed"),
+    DRY_RUN_NOT_READY("DRY_RUN_NOT_READY", "Dry run snapshots are not ready"),
+    DEEPSEEK_API_KEY_MISSING("DEEPSEEK_API_KEY_MISSING", "DeepSeek API key is missing"),
     INTERNAL_ERROR("INTERNAL_ERROR", "Internal server error");
 
     private final String code;

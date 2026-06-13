@@ -20,6 +20,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import travelcare_agent.trace.SpanType;
+import travelcare_agent.trace.TraceContextHolder;
+import travelcare_agent.trace.TraceService;
 
 @Service
 public class SessionService {
@@ -36,7 +40,9 @@ public class SessionService {
     private final ObjectMapper objectMapper;
     private final AuditService auditService;
     private final AgentRunService agentRunService;
+    private final TraceService traceService;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public SessionService(
             SessionRepository repository,
             SessionEventService eventService,
@@ -47,7 +53,8 @@ public class SessionService {
             travelcare_agent.workflow.repository.WorkflowTaskRepository workflowTaskRepository,
             ObjectMapper objectMapper,
             AuditService auditService,
-            AgentRunService agentRunService
+            AgentRunService agentRunService,
+            TraceService traceService
     ) {
         this.repository = repository;
         this.eventService = eventService;
@@ -59,9 +66,21 @@ public class SessionService {
         this.objectMapper = objectMapper;
         this.auditService = auditService;
         this.agentRunService = agentRunService;
+        this.traceService = traceService;
+    }
+
+    public SessionService(SessionRepository repository, SessionEventService eventService,
+            AgentOrchestrator agentOrchestrator, IdempotencyService idempotencyService,
+            travelcare_agent.workflow.repository.WorkflowRepository workflowRepository,
+            travelcare_agent.workflow.WorkflowTaskService workflowTaskService,
+            travelcare_agent.workflow.repository.WorkflowTaskRepository workflowTaskRepository,
+            ObjectMapper objectMapper, AuditService auditService, AgentRunService agentRunService) {
+        this(repository, eventService, agentOrchestrator, idempotencyService, workflowRepository,
+                workflowTaskService, workflowTaskRepository, objectMapper, auditService, agentRunService, null);
     }
 
     public CreateSessionResult createSession(Long userId, String channel) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.SESSION_WRITE);
         if (userId == null) {
             throw new BusinessException(ResultCode.VALIDATION_FAILED, "userId is required");
         }
@@ -75,6 +94,7 @@ public class SessionService {
 
     @Transactional
     public SendMessageResult sendMessage(Long sessionId, String content, String idempotencyKey, Boolean async) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.SESSION_EVENT_WRITE);
         Session session = requireExistingSession(sessionId);
         if (isBlank(content)) {
             throw new BusinessException(ResultCode.VALIDATION_FAILED, "content is required");
@@ -130,9 +150,17 @@ public class SessionService {
                         .orElse(null);
             }
 
-            return new SendMessageResult(answer, userEvent.getId(), workflowEvtId, assistantId, workflowId, taskId);
+            TraceService.RootTrace reusedTrace = startTrace(session, userEvent.getId(), content, true);
+            if (reusedTrace.available()) {
+                traceService.recordEvent(reusedTrace.traceId(), reusedTrace.rootSpanId(),
+                        travelcare_agent.trace.TraceEventType.IDEMPOTENCY_REUSED, "sendMessage-reused", Map.of());
+                traceService.finishRootRunSuccess(reusedTrace.traceId(), workflowId, assistantId, Map.of("answer", answer));
+            }
+            return new SendMessageResult(answer, userEvent.getId(), workflowEvtId, assistantId, workflowId, taskId,
+                    reusedTrace.traceId(), reusedTrace.available());
         }
 
+        TraceService.RootTrace trace = TraceService.RootTrace.unavailable();
         try {
             SessionEvent userEvent = eventService.appendMessage(
                     sessionId,
@@ -140,21 +168,35 @@ public class SessionService {
                     content,
                     metadata("idempotencyKey", idempotencyKey)
             );
+            trace = startTrace(session, userEvent.getId(), content, false);
+            if (trace.available()) {
+                traceService.recordSnapshot(trace.traceId(), trace.rootSpanId(), "USER_INPUT", "SESSION_EVENT",
+                        String.valueOf(userEvent.getId()), Map.of(
+                                "sessionId", sessionId,
+                                "userId", session.getUserId(),
+                                "message", content
+                        ));
+            }
 
             if (Boolean.TRUE.equals(async)) {
                 travelcare_agent.workflow.entity.Workflow workflow = travelcare_agent.workflow.entity.Workflow.create(sessionId, "order_refund_inquiry");
                 workflowRepository.save(workflow);
 
-                String payload = "{\"message\":\"" + escape(content) + "\",\"userEventId\":" + userEvent.getId() + "}";
-                travelcare_agent.workflow.entity.WorkflowTask task = workflowTaskService.createTask(workflow.getId(), sessionId, "order_refund_inquiry", payload, idempotencyKey);
+                String payload = "{\"message\":\"" + escape(content) + "\",\"userEventId\":" + userEvent.getId()
+                        + (trace.available() ? ",\"traceId\":\"" + trace.traceId() + "\",\"parentSpanId\":\"" + trace.rootSpanId() + "\"" : "") + "}";
+                travelcare_agent.workflow.entity.WorkflowTask task = workflowTaskService.createTask(workflow.getId(), sessionId,
+                        "order_refund_inquiry", payload, idempotencyKey, trace.traceId(), trace.rootSpanId());
                 
                 idempotencyService.markSuccess(idempotencyKey, "sendMessage", userEvent.getId());
-                return new SendMessageResult("ACCEPTED", userEvent.getId(), null, null, workflow.getId(), task.getId());
+                return new SendMessageResult("ACCEPTED", userEvent.getId(), null, null, workflow.getId(), task.getId(),
+                        trace.traceId(), trace.available());
             }
 
-            AgentRun agentRun = safeStartAgentRun(sessionId, null, null, idempotencyKey, "SYNC_REPLY", "session_service", "SYSTEM");
+            AgentRun agentRun = null;
             AgentOrchestrator.AgentReply reply;
-            try {
+            try (TraceContextHolder.Scope ignored = trace.available()
+                    ? TraceContextHolder.attach(trace.traceId(), trace.rootSpanId()) : null) {
+                agentRun = safeStartAgentRun(sessionId, null, null, idempotencyKey, "SYNC_REPLY", "session_service", "SYSTEM");
                 reply = agentOrchestrator.handle(
                         new AgentOrchestrator.AgentRequest(sessionId, session.getUserId(), content)
                 );
@@ -204,6 +246,9 @@ public class SessionService {
             } catch (Exception ignore) {}
 
             SessionEvent assistantEvent;
+            TraceService.SpanHandle outputSpan = trace.available()
+                    ? traceService.startSpan(trace.traceId(), trace.rootSpanId(), SpanType.OUTPUT, "assistant-response", Map.of())
+                    : TraceService.SpanHandle.unavailable();
             try {
                 assistantEvent = eventService.appendMessage(
                         sessionId,
@@ -211,12 +256,15 @@ public class SessionService {
                         reply.answer(),
                         metaJson
                 );
+                if (traceService != null) traceService.finishSpanSuccess(outputSpan, "SESSION_EVENT:" + assistantEvent.getId(), Map.of("answer", reply.answer()));
             } catch (RuntimeException ex) {
+                if (traceService != null) traceService.finishSpanFailure(outputSpan, "ASSISTANT_EVENT_WRITE_FAILED", ex, Map.of());
                 safeMarkFailed(agentRun, "FAILED_OUTPUT_EVENT", "ASSISTANT_EVENT_WRITE_FAILED", ex);
                 throw ex;
             }
 
             safeMarkSucceeded(agentRun, assistantEvent.getId(), reply.answer());
+            if (trace.available()) traceService.finishRootRunSuccess(trace.traceId(), reply.workflowId(), assistantEvent.getId(), Map.of("answer", reply.answer()));
 
             idempotencyService.markSuccess(idempotencyKey, "sendMessage", assistantEvent.getId());
 
@@ -226,12 +274,21 @@ public class SessionService {
                     workflowEvent.getId(),
                     assistantEvent.getId(),
                     reply.workflowId(),
-                    null
+                    null,
+                    trace.traceId(),
+                    trace.available()
             );
         } catch (Exception ex) {
+            if (trace.available()) traceService.finishRootRunFailure(trace.traceId(), "SEND_MESSAGE_FAILED", ex);
             idempotencyService.markFailed(idempotencyKey);
             throw ex;
         }
+    }
+
+    private TraceService.RootTrace startTrace(Session session, Long inputEventId, String content, boolean reused) {
+        if (traceService == null) return TraceService.RootTrace.unavailable();
+        return traceService.startRootRun(session.getId(), session.getUserId(), inputEventId,
+                null, null, AgentRunService.PROMPT_VERSION, Map.of("message", content, "idempotencyReused", reused));
     }
 
     public List<SessionEvent> listEvents(Long sessionId) {
@@ -425,7 +482,9 @@ public class SessionService {
             Long workflowEventId,
             Long assistantEventId,
             Long workflowId,
-            Long taskId
+            Long taskId,
+            String traceId,
+            boolean traceAvailable
     ) {
     }
 }

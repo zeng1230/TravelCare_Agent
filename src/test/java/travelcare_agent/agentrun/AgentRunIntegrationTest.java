@@ -12,6 +12,7 @@ import travelcare_agent.workflow.WorkflowTaskWorker;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import travelcare_agent.trace.TraceQueryService;
 
 @SpringBootTest
 @Transactional
@@ -28,6 +29,7 @@ class AgentRunIntegrationTest {
 
     @Autowired
     private WorkflowTaskWorker workflowTaskWorker;
+    @Autowired private TraceQueryService traceQueryService;
 
     @Test
     void synchronousMessageWritesSucceededAgentRun() {
@@ -41,7 +43,40 @@ class AgentRunIntegrationTest {
         );
 
         assertThat(result.assistantEventId()).isNotNull();
+        assertThat(result.traceAvailable()).isTrue();
+        assertThat(result.traceId()).isNotBlank();
+        TraceQueryService.TraceDiagnostics diagnostics = traceQueryService.diagnostics(result.traceId());
+        assertThat(diagnostics.provider()).isEqualTo("mock");
+        assertThat(diagnostics.model()).isNotBlank();
+        assertThat(diagnostics.promptVersion()).isNotBlank();
+        assertThat(diagnostics.finalOutput()).isNotNull();
+        assertThat(diagnostics.workflowPath()).extracting(travelcare_agent.trace.entity.TraceSpan::getSpanType)
+                .contains("WORKFLOW", "WORKFLOW_STEP");
+        assertThat(diagnostics.toolCalls()).singleElement().satisfies(span -> {
+            assertThat(span.getStatus()).isEqualTo("SUCCEEDED");
+            assertThat(span.getDurationMs()).isGreaterThanOrEqualTo(0L);
+        });
+        assertThat(diagnostics.policyDecisions()).isNotEmpty();
+        assertThat(traceQueryService.get(result.traceId()).spans())
+                .extracting(travelcare_agent.trace.entity.TraceSpan::getSpanType)
+                .contains("REQUEST", "CONTEXT", "RETRIEVAL", "MODEL", "WORKFLOW", "WORKFLOW_STEP", "TOOL", "POLICY", "OUTPUT", "AUDIT");
+        assertThat(traceQueryService.get(result.traceId()).snapshots())
+                .extracting(travelcare_agent.trace.entity.TraceSnapshot::getSnapshotType)
+                .contains(
+                        "USER_INPUT",
+                        "CONTEXT_SUMMARY",
+                        "RETRIEVAL_SUMMARY",
+                        "MODEL_INPUT",
+                        "MODEL_OUTPUT",
+                        "TOOL_REQUEST",
+                        "TOOL_RESULT",
+                        "POLICY_INPUT",
+                        "POLICY_DECISION",
+                        "WORKFLOW_PATH",
+                        "FINAL_OUTPUT"
+                );
         assertThat(agentRunRepository.findBySessionId(sessionId, 1, 20))
+                .filteredOn(run -> "SYNC_REPLY".equals(run.getRunType()))
                 .singleElement()
                 .satisfies(run -> {
                     assertThat(run.getStatus()).isEqualTo("SUCCEEDED");
@@ -56,10 +91,13 @@ class AgentRunIntegrationTest {
                     assertThat(run.getOutputEventId()).isEqualTo(result.assistantEventId());
                     assertThat(run.getLatencyMs()).isGreaterThanOrEqualTo(0L);
                 });
+        assertThat(agentRunRepository.findBySessionId(sessionId, 1, 20))
+                .extracting(AgentRun::getRunType)
+                .contains("INTENT_CLASSIFICATION", "RESPONSE_GENERATION");
     }
 
     @Test
-    void asynchronousWorkerWritesSucceededAgentRunAndPayloadKeepsUserEventId() {
+    void asynchronousWorkerWritesSucceededAgentRunAndPayloadKeepsUserEventId() throws Exception {
         Long sessionId = sessionService.createSession(1001L, "WEB").sessionId();
 
         SessionService.SendMessageResult accepted = sessionService.sendMessage(
@@ -70,14 +108,19 @@ class AgentRunIntegrationTest {
         );
 
         assertThat(accepted.taskId()).isNotNull();
+        assertThat(accepted.traceAvailable()).isTrue();
         assertThat(workflowTaskRepository.findById(accepted.taskId()))
                 .get()
                 .satisfies(task -> assertThat(task.getPayloadJson())
                         .contains("\"userEventId\":" + accepted.userEventId()));
 
-        workflowTaskWorker.processTask(Map.of("taskId", accepted.taskId()));
+        String payloadJson = workflowTaskRepository.findById(accepted.taskId()).orElseThrow().getPayloadJson();
+        assertThat(payloadJson).contains(accepted.traceId(), "parentSpanId");
+        String parentSpanId = new com.fasterxml.jackson.databind.ObjectMapper().readTree(payloadJson).path("parentSpanId").asText();
+        workflowTaskWorker.processTask(Map.of("taskId", accepted.taskId(), "traceId", accepted.traceId(), "parentSpanId", parentSpanId));
 
         assertThat(agentRunRepository.findBySessionId(sessionId, 1, 20))
+                .filteredOn(run -> "ASYNC_WORKER_REPLY".equals(run.getRunType()))
                 .singleElement()
                 .satisfies(run -> {
                     assertThat(run.getStatus()).isEqualTo("SUCCEEDED");
@@ -90,5 +133,11 @@ class AgentRunIntegrationTest {
                     assertThat(run.getContextHash()).hasSize(64);
                     assertThat(run.getAnswerHash()).hasSize(64);
                 });
+        assertThat(agentRunRepository.findBySessionId(sessionId, 1, 20))
+                .extracting(AgentRun::getRunType)
+                .contains("INTENT_CLASSIFICATION", "RESPONSE_GENERATION");
+        assertThat(traceQueryService.get(accepted.traceId()).spans())
+                .extracting(travelcare_agent.trace.entity.TraceSpan::getSpanType)
+                .contains("ASYNC_TASK", "WORKFLOW", "OUTPUT");
     }
 }

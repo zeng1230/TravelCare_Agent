@@ -128,7 +128,7 @@ class Stage4EvaluationSuiteTest {
             results.add(runCase(evaluationCase));
         }
 
-        Path report = reportWriter.write(results, "PASS");
+        Path report = reportWriter.write("stage4", results, "PASS");
 
         assertThat(report).exists();
         String markdown = Files.readString(report);
@@ -188,6 +188,7 @@ class Stage4EvaluationSuiteTest {
             );
 
             AgentRun agentRun = agentRunRepository.findBySessionId(sessionId, 1, 20).stream()
+                    .filter(run -> "SYNC_REPLY".equals(run.getRunType()))
                     .findFirst()
                     .orElse(null);
             Workflow workflow = sendResult.workflowId() == null
