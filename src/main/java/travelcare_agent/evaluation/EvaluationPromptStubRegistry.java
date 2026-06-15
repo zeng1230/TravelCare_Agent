@@ -1,0 +1,1 @@
+package travelcare_agent.evaluation; import org.springframework.stereotype.Component; import java.util.Set; @Component public class EvaluationPromptStubRegistry {private static final Set<String> VALUES=Set.of("stage8-default"); public boolean contains(String v){return VALUES.contains(v);} public String defaultVersion(){return "stage8-default";}}

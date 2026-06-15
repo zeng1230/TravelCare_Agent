@@ -1,0 +1,3 @@
+package travelcare_agent.evaluation.repository.mybatis;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper; import org.apache.ibatis.annotations.Mapper; import travelcare_agent.evaluation.entity.*;
+public final class EvaluationMappers {private EvaluationMappers(){} @Mapper public interface Dataset extends BaseMapper<EvaluationDataset>{} @Mapper public interface Case extends BaseMapper<EvaluationCase>{} @Mapper public interface Run extends BaseMapper<EvaluationRun>{} @Mapper public interface Result extends BaseMapper<EvaluationCaseResult>{}}
