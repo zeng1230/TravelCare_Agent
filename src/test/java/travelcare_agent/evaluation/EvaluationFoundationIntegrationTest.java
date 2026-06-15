@@ -44,6 +44,7 @@ class EvaluationFoundationIntegrationTest {
 
     @Autowired private EvaluationDatasetService datasets;
     @Autowired private EvaluationRunnerService runner;
+    @Autowired private BaselinePromotionService baselinePromotion;
     @Autowired private EvaluationCaseRepository caseRepo;
     @Autowired private EvaluationCaseResultRepository resultRepo;
     @Autowired private TraceRunRepository traceRuns;
@@ -120,6 +121,54 @@ class EvaluationFoundationIntegrationTest {
         );
         assertThat(Files.exists(Path.of(
                 "target", "evaluation", "runs", run.getId() + "_report.md"))).isTrue();
+    }
+
+    @Test
+    void promotesBaselineAndDetectsControlledRegressionsWithoutBusinessSideEffects() {
+        Map<String, Long> businessCountsBefore = counts();
+        List<RefundScenario> scenarios = scenarios();
+        EvaluationDataset dataset = datasets.create(
+                "refund-baseline-" + System.nanoTime(), "Refund Baseline", "Stage 8B");
+        for (RefundScenario scenario : scenarios) {
+            datasets.createCase(dataset.getId(), scenario.caseKey(), scenario.caseKey(),
+                    createSourceTrace(scenario), expectation(scenario), "[\"refund\"]", true);
+        }
+        assertThat(caseRepo.findByDatasetId(dataset.getId()).stream()
+                .map(EvaluationCase::getSourceTraceId)).doesNotHaveDuplicates().hasSize(6);
+        datasets.activate(dataset.getId());
+
+        EvaluationRun baselineRun = runner.start(dataset.getId(), "mock", "stage8-default", true);
+        assertThat(baselineRun.getStatus()).isEqualTo("PASSED");
+        assertThat(baselineRun.getRegressionStatus()).isEqualTo("NOT_COMPARED");
+        var promoted = baselinePromotion.promote(baselineRun.getId(), "stage8b-test");
+        assertThat(promoted.getRunId()).isEqualTo(baselineRun.getId());
+        baselinePromotion.promote(baselineRun.getId(), "stage8b-test-repeat");
+        assertThat(jdbc.queryForObject("select count(*) from evaluation_baselines where dataset_id = ?",
+                Long.class, dataset.getId())).isEqualTo(2L);
+        assertThat(baselinePromotion.current(dataset.getId()).getRunId()).isEqualTo(baselineRun.getId());
+
+        EvaluationRun wording = runner.start(dataset.getId(), "mock",
+                "stage8-regression-policy-wording", true);
+        assertThat(wording.getBaselineRunId()).isEqualTo(baselineRun.getId());
+        assertThat(wording.getRegressionStatus()).isEqualTo("REGRESSION");
+        assertThat(wording.getRegressionCount()).isGreaterThanOrEqualTo(1);
+        assertThat(resultRepo.findResultsByRunId(wording.getId()))
+                .filteredOn(r -> "REGRESSION".equals(r.getRegressionStatus()))
+                .isNotEmpty()
+                .allMatch(r -> r.getBaselineCaseResultId() != null
+                        && r.getRegressionReasonJson().contains("changedFields")
+                        && r.getRegressionReasonJson().contains("highestRisk")
+                        && r.getRegressionReasonJson().contains("summary"));
+        assertThat(runner.report(wording.getId()))
+                .contains("Baseline Run ID: " + baselineRun.getId(), "Regression Status: REGRESSION",
+                        "Regression Count", "regressionReasonJson");
+
+        EvaluationRun unsafe = runner.start(dataset.getId(), "mock",
+                "stage8-regression-unsafe", true);
+        assertThat(unsafe.getRegressionStatus()).isEqualTo("REGRESSION");
+        assertThat(unsafe.getRegressionCount()).isGreaterThanOrEqualTo(1);
+        assertThat(counts()).isEqualTo(businessCountsBefore);
+        verifyNoInteractions(orderAdapter, deepSeek, rabbit);
     }
 
     private Long createSourceTrace(RefundScenario scenario) {

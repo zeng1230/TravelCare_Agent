@@ -25,6 +25,7 @@ public enum ResultCode {
     EVALUATION_RUN_NOT_FOUND("EVALUATION_RUN_NOT_FOUND", "Evaluation run not found"),
     EVALUATION_REPORT_NOT_FOUND("EVALUATION_REPORT_NOT_FOUND", "Evaluation report not found"),
     EVALUATION_INVALID_EXPECTATION("EVALUATION_INVALID_EXPECTATION", "Evaluation expectation is invalid"),
+    EVALUATION_BASELINE_PROMOTION_NOT_ALLOWED("EVALUATION_BASELINE_PROMOTION_NOT_ALLOWED", "Evaluation baseline promotion is not allowed"),
     INTERNAL_ERROR("INTERNAL_ERROR", "Internal server error");
 
     private final String code;
