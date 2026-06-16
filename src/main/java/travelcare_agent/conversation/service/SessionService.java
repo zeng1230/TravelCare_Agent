@@ -240,6 +240,11 @@ public class SessionService {
             metaMap.put("source", "agent_orchestrator");
             metaMap.put("retrievalChunkIds", reply.retrievalChunkIds());
             metaMap.put("memoryIds", reply.memoryIds());
+            metaMap.put("answerabilityStatus", reply.answerabilityStatus());
+            metaMap.put("answerabilityReasonCode", reply.answerabilityReasonCode());
+            metaMap.put("requiredAction", reply.requiredAction());
+            metaMap.put("citations", reply.citations());
+            metaMap.put("rejectedCitationCandidates", reply.rejectedCitationCandidates());
             String metaJson = "{}";
             try {
                 metaJson = objectMapper.writeValueAsString(metaMap);

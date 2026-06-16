@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import travelcare_agent.enums.WorkflowStatus;
+import travelcare_agent.answerability.AnswerabilityDecision;
+import travelcare_agent.answerability.AnswerabilityRequiredAction;
 import travelcare_agent.human.service.HumanReviewService;
 import travelcare_agent.refund.entity.RefundCase;
 import travelcare_agent.refund.repository.RefundCaseRepository;
@@ -94,6 +96,8 @@ public class AgentOrchestrator {
             throw new AgentStageException("FAILED_GENERATION", "WORKFLOW_EXECUTION_FAILED", agentContext, null, ex);
         }
 
+        // Why: Escalate to human review if automated rules require manual verification,
+        // preventing incorrect automated decisions and ensuring compliance for edge cases.
         if (workflowResult.workflow().getStatus() == WorkflowStatus.NEED_HUMAN) {
             // Try to resolve refundCaseId
             Long refundCaseId = refundCaseRepository.findByWorkflowId(workflowResult.workflow().getId())
@@ -121,12 +125,22 @@ public class AgentOrchestrator {
 
         String answer;
         try {
-            String deterministicAnswer = responseGenerator.generate(intent, workflowResult, agentContext);
-            answer = agentModelService == null
+            // Why: Generate a strict rule-compliant deterministic answer first to prevent LLM hallucinations,
+            // then use LLM only to format it into a friendly customer support tone.
+            AnswerabilityDecision answerabilityDecision = agentContext.answerabilityDecision();
+            if (answerabilityDecision != null
+                    && isKnowledgeExplanationIntent(intent.intent())
+                    && answerabilityDecision.status() == travelcare_agent.answerability.AnswerabilityStatus.UNANSWERABLE
+                    && answerabilityDecision.requiredAction() == AnswerabilityRequiredAction.FALLBACK_REPLY) {
+                answer = answerabilityDecision.fallbackMessage();
+            } else {
+                String deterministicAnswer = responseGenerator.generate(intent, workflowResult, agentContext);
+                answer = agentModelService == null
                     ? deterministicAnswer
                     : agentModelService.generateCustomerAnswer(
                             request.sessionId(), workflowResult.workflow().getId(), contextEventIds, deterministicAnswer
                     );
+            }
         } catch (RuntimeException ex) {
             throw new AgentStageException("FAILED_GENERATION", "RESPONSE_GENERATION_FAILED", agentContext, workflowResult.workflow().getId(), ex);
         }
@@ -154,11 +168,24 @@ public class AgentOrchestrator {
                 documentIds,
                 retrievalChunkIds,
                 memoryIds,
-                eventIds
+                eventIds,
+                agentContext.answerabilityDecision() == null ? null : agentContext.answerabilityDecision().status().name(),
+                agentContext.answerabilityDecision() == null ? null : agentContext.answerabilityDecision().reasonCode().name(),
+                agentContext.answerabilityDecision() == null ? null : agentContext.answerabilityDecision().requiredAction().name(),
+                agentContext.answerabilityDecision() == null ? List.of() : agentContext.answerabilityDecision().citations(),
+                agentContext.answerabilityDecision() == null ? List.of() : agentContext.answerabilityDecision().rejectedCitationCandidates()
         );
     }
 
     public record AgentRequest(Long sessionId, Long userId, String message) {
+    }
+
+    private static boolean isKnowledgeExplanationIntent(String intent) {
+        if (intent == null) {
+            return false;
+        }
+        String normalized = intent.trim().toUpperCase();
+        return "FAQ".equals(normalized) || "SOP".equals(normalized) || "KNOWLEDGE_QUERY".equals(normalized);
     }
 
     public record AgentReply(
@@ -170,7 +197,12 @@ public class AgentOrchestrator {
             List<Long> documentIds,
             List<Long> retrievalChunkIds,
             List<Long> memoryIds,
-            List<Long> eventIds
+            List<Long> eventIds,
+            String answerabilityStatus,
+            String answerabilityReasonCode,
+            String requiredAction,
+            List<travelcare_agent.answerability.CitationMetadata> citations,
+            List<travelcare_agent.answerability.RejectedCitationCandidate> rejectedCitationCandidates
     ) {
     }
 

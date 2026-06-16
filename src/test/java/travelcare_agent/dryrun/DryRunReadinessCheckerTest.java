@@ -46,6 +46,24 @@ class DryRunReadinessCheckerTest {
         assertThat(result.missingSnapshots()).isEmpty();
     }
 
+    @Test
+    void doesNotRequireStage9AnswerabilitySnapshotsForExistingTraceReadiness() {
+        TraceQueryService queryService = mock(TraceQueryService.class);
+        TraceRun run = run("stage8-ready-trace", false);
+        List<TraceSnapshot> snapshots = java.util.Arrays.stream(TraceSnapshotType.values())
+                .filter(type -> type != TraceSnapshotType.ANSWERABILITY_INPUT)
+                .filter(type -> type != TraceSnapshotType.ANSWERABILITY_DECISION)
+                .filter(type -> type != TraceSnapshotType.CITATION_SUMMARY)
+                .map(type -> snapshot(type, payload(type)))
+                .toList();
+        when(queryService.get("stage8-ready-trace")).thenReturn(new TraceQueryService.TraceDetail(run, List.of(), List.of(), snapshots));
+
+        DryRunReadinessResult result = new DryRunReadinessChecker(queryService, new ObjectMapper()).check("stage8-ready-trace", "mock");
+
+        assertThat(result.ready()).isTrue();
+        assertThat(result.missingSnapshots()).doesNotContain("ANSWERABILITY_INPUT", "ANSWERABILITY_DECISION", "CITATION_SUMMARY");
+    }
+
     private static TraceRun run(String traceId, boolean dryRun) {
         TraceRun run = new TraceRun();
         run.setTraceId(traceId);
