@@ -124,6 +124,7 @@ public class AgentOrchestrator {
         }
 
         String answer;
+        boolean fallbackUsed = false;
         try {
             // Why: Generate a strict rule-compliant deterministic answer first to prevent LLM hallucinations,
             // then use LLM only to format it into a friendly customer support tone.
@@ -133,6 +134,7 @@ public class AgentOrchestrator {
                     && answerabilityDecision.status() == travelcare_agent.answerability.AnswerabilityStatus.UNANSWERABLE
                     && answerabilityDecision.requiredAction() == AnswerabilityRequiredAction.FALLBACK_REPLY) {
                 answer = answerabilityDecision.fallbackMessage();
+                fallbackUsed = true;
             } else {
                 String deterministicAnswer = responseGenerator.generate(intent, workflowResult, agentContext);
                 answer = agentModelService == null
@@ -172,6 +174,7 @@ public class AgentOrchestrator {
                 agentContext.answerabilityDecision() == null ? null : agentContext.answerabilityDecision().status().name(),
                 agentContext.answerabilityDecision() == null ? null : agentContext.answerabilityDecision().reasonCode().name(),
                 agentContext.answerabilityDecision() == null ? null : agentContext.answerabilityDecision().requiredAction().name(),
+                fallbackUsed,
                 agentContext.answerabilityDecision() == null ? List.of() : agentContext.answerabilityDecision().citations(),
                 agentContext.answerabilityDecision() == null ? List.of() : agentContext.answerabilityDecision().rejectedCitationCandidates()
         );
@@ -201,6 +204,7 @@ public class AgentOrchestrator {
             String answerabilityStatus,
             String answerabilityReasonCode,
             String requiredAction,
+            boolean fallbackUsed,
             List<travelcare_agent.answerability.CitationMetadata> citations,
             List<travelcare_agent.answerability.RejectedCitationCandidate> rejectedCitationCandidates
     ) {

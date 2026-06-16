@@ -69,6 +69,8 @@ public class DiagnosticDryRunService {
                 TraceContextHolder.Scope traceScope=TraceContextHolder.attach(root.traceId(),root.rootSpanId())){
             copy(root,snapshots,TraceSnapshotType.USER_INPUT);
             copy(root,snapshots,TraceSnapshotType.CONTEXT_SUMMARY);
+            copyOptional(root,snapshots,TraceSnapshotType.ANSWERABILITY_DECISION.name());
+            copyOptional(root,snapshots,TraceSnapshotType.CITATION_SUMMARY.name());
 
             TraceService.SpanHandle retrieval=traceService.startSpan(SpanType.RETRIEVAL,"snapshot-retrieval",Map.of("source","snapshot"));
             var retrievalSummary=snapshotRetrievalExecutor.execute(snapshots.get(TraceSnapshotType.RETRIEVAL_SUMMARY.name()));
@@ -104,7 +106,10 @@ public class DiagnosticDryRunService {
                     "operation","RESPONSE_GENERATION","provider",generated.provider(),"model",generated.model(),"promptVersion",promptVersion,"output",generated.output()));
             traceService.finishSpanSuccess(model,null,Map.of("provider",generated.provider(),"model",generated.model(),"promptVersion",promptVersion));
 
-            traceService.finishRootRunSuccess(root.traceId(),null,null,Map.of("answer",generated.answer()));
+            Map<String,Object> finalOutput=new LinkedHashMap<>();finalOutput.put("answer",generated.answer());
+            Boolean fallbackUsed=originalFallbackUsed(snapshots.get(TraceSnapshotType.FINAL_OUTPUT.name()));
+            if(fallbackUsed!=null)finalOutput.put("fallbackUsed",fallbackUsed);
+            traceService.finishRootRunSuccess(root.traceId(),null,null,finalOutput);
             TraceDiffResult diff=request.compareAfterRun()?traceDiffService.create(originalTraceId,root.traceId()):null;
             return DryRunResult.succeeded(originalTraceId,root.traceId(),diff);
         }catch(DryRunSideEffectBlockedException ex){
@@ -118,5 +123,12 @@ public class DiagnosticDryRunService {
 
     private void copy(TraceService.RootTrace root,Map<String,TraceSnapshot> snapshots,TraceSnapshotType type)throws Exception{
         TraceSnapshot snapshot=snapshots.get(type.name());traceService.recordSnapshot(root.traceId(),root.rootSpanId(),type.name(),"TRACE_SNAPSHOT",snapshot.getTraceId(),objectMapper.readTree(snapshot.getPayloadJson()));
+    }
+    private void copyOptional(TraceService.RootTrace root,Map<String,TraceSnapshot> snapshots,String type)throws Exception{
+        TraceSnapshot snapshot=snapshots.get(type);if(snapshot!=null)traceService.recordSnapshot(root.traceId(),root.rootSpanId(),type,"TRACE_SNAPSHOT",snapshot.getTraceId(),objectMapper.readTree(snapshot.getPayloadJson()));
+    }
+    private Boolean originalFallbackUsed(TraceSnapshot snapshot){
+        if(snapshot==null||snapshot.getPayloadJson()==null)return null;
+        try{var node=objectMapper.readTree(snapshot.getPayloadJson());return node.has("fallbackUsed")?node.path("fallbackUsed").asBoolean(false):null;}catch(Exception e){return null;}
     }
 }
