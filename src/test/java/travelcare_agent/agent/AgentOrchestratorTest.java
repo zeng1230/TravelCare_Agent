@@ -1,6 +1,11 @@
 package travelcare_agent.agent;
 
 import org.junit.jupiter.api.Test;
+import travelcare_agent.answerability.AnswerabilityDecision;
+import travelcare_agent.answerability.AnswerabilityReasonCode;
+import travelcare_agent.answerability.AnswerabilityRequiredAction;
+import travelcare_agent.answerability.AnswerabilityStatus;
+import travelcare_agent.answerability.CitationPolicy;
 import travelcare_agent.adapter.order.MockOrderAdapter;
 import travelcare_agent.enums.OrderStatus;
 import travelcare_agent.enums.WorkflowStatus;
@@ -25,6 +30,8 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 class AgentOrchestratorTest {
 
@@ -96,7 +103,68 @@ class AgentOrchestratorTest {
                 .contains("Rule: order number is required before refund rules can be checked.");
     }
 
+    @Test
+    void unanswerableFallbackReplyDoesNotCallModelForKnowledgeAnswer() {
+        AgentModelService modelService = org.mockito.Mockito.mock(AgentModelService.class);
+        AgentOrchestrator orchestrator = orchestratorWithOrderAndContext(
+                new MockOrderAdapter.OrderSnapshot(
+                        12L,
+                        "ORD-12",
+                        1001L,
+                        OrderStatus.PAID,
+                        true,
+                        new BigDecimal("188.00"),
+                        LocalDateTime.now(CLOCK).plusHours(48)
+                ),
+                new AgentContext(
+                        List.of(),
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        new AnswerabilityDecision(
+                                AnswerabilityStatus.UNANSWERABLE,
+                                AnswerabilityReasonCode.NO_RETRIEVAL,
+                                AnswerabilityRequiredAction.FALLBACK_REPLY,
+                                CitationPolicy.OPTIONAL,
+                                List.of(),
+                                false,
+                                false,
+                                false,
+                                List.of(),
+                                List.of(),
+                                "I don't have enough verified knowledge to answer that from the knowledge base. Manual support can help verify it."
+                        )
+                ),
+                modelService
+        );
+        org.mockito.Mockito.when(modelService.classifyIntentAndExtractSlots(
+                org.mockito.Mockito.anyLong(), org.mockito.Mockito.isNull(), org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()
+        )).thenReturn(new MockIntentClassifier.IntentResult("FAQ", "ORD-12"));
+
+        AgentOrchestrator.AgentReply reply = orchestrator.handle(
+                new AgentOrchestrator.AgentRequest(101L, 1001L, "What policy supports refund order ORD-12?")
+        );
+
+        assertThat(reply.answer()).contains("I don't have enough verified knowledge");
+        assertThat(reply.answerabilityStatus()).isEqualTo("UNANSWERABLE");
+        verify(modelService, never()).generateCustomerAnswer(
+                org.mockito.Mockito.anyLong(), org.mockito.Mockito.anyLong(), org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()
+        );
+    }
+
     private static AgentOrchestrator orchestratorWithOrder(MockOrderAdapter.OrderSnapshot order) {
+        return orchestratorWithOrderAndContext(order, new travelcare_agent.agent.AgentContext(
+                List.of(),
+                null,
+                null,
+                List.of(),
+                List.of()
+        ), null);
+    }
+
+    private static AgentOrchestrator orchestratorWithOrderAndContext(MockOrderAdapter.OrderSnapshot order,
+            AgentContext agentContext, AgentModelService agentModelService) {
         ToolCallRepository toolCallRepository = new ToolCallRepository() {
             public ToolCall save(ToolCall call) {
                 if (call.getId() == null) call.setId(new java.util.Random().nextLong());
@@ -139,15 +207,8 @@ class AgentOrchestratorTest {
         );
 
         travelcare_agent.agent.ContextAssembler contextAssembler = org.mockito.Mockito.mock(travelcare_agent.agent.ContextAssembler.class);
-        travelcare_agent.agent.AgentContext dummyContext = new travelcare_agent.agent.AgentContext(
-                List.of(),
-                null,
-                null,
-                List.of(),
-                List.of()
-        );
         org.mockito.Mockito.when(contextAssembler.assemble(org.mockito.Mockito.anyLong(), org.mockito.Mockito.anyString()))
-                .thenReturn(dummyContext);
+                .thenReturn(agentContext);
 
         return new AgentOrchestrator(
                 new MockIntentClassifier(),
@@ -156,8 +217,8 @@ class AgentOrchestratorTest {
                 humanReviewService,
                 refundRepo,
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                contextAssembler
+                contextAssembler,
+                agentModelService
         );
     }
 }
-

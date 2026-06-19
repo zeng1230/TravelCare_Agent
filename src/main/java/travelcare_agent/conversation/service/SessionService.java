@@ -240,6 +240,12 @@ public class SessionService {
             metaMap.put("source", "agent_orchestrator");
             metaMap.put("retrievalChunkIds", reply.retrievalChunkIds());
             metaMap.put("memoryIds", reply.memoryIds());
+            metaMap.put("answerabilityStatus", reply.answerabilityStatus());
+            metaMap.put("answerabilityReasonCode", reply.answerabilityReasonCode());
+            metaMap.put("requiredAction", reply.requiredAction());
+            metaMap.put("fallbackUsed", reply.fallbackUsed());
+            metaMap.put("citations", reply.citations());
+            metaMap.put("rejectedCitationCandidates", reply.rejectedCitationCandidates());
             String metaJson = "{}";
             try {
                 metaJson = objectMapper.writeValueAsString(metaMap);
@@ -264,7 +270,7 @@ public class SessionService {
             }
 
             safeMarkSucceeded(agentRun, assistantEvent.getId(), reply.answer());
-            if (trace.available()) traceService.finishRootRunSuccess(trace.traceId(), reply.workflowId(), assistantEvent.getId(), Map.of("answer", reply.answer()));
+            if (trace.available()) traceService.finishRootRunSuccess(trace.traceId(), reply.workflowId(), assistantEvent.getId(), finalOutput(reply));
 
             idempotencyService.markSuccess(idempotencyKey, "sendMessage", assistantEvent.getId());
 
@@ -471,6 +477,16 @@ public class SessionService {
                 workflow.getVersion(),
                 workflow.getStateJson()
         );
+    }
+
+    private Map<String, Object> finalOutput(AgentOrchestrator.AgentReply reply) {
+        java.util.Map<String, Object> values = new java.util.LinkedHashMap<>();
+        values.put("answer", reply.answer());
+        values.put("answerabilityStatus", reply.answerabilityStatus());
+        values.put("answerabilityReasonCode", reply.answerabilityReasonCode());
+        values.put("requiredAction", reply.requiredAction());
+        values.put("fallbackUsed", reply.fallbackUsed());
+        return values;
     }
 
     public record CreateSessionResult(Long sessionId, String status) {

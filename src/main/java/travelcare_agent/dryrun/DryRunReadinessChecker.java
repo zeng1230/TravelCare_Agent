@@ -16,7 +16,19 @@ import java.util.stream.Collectors;
 
 @Service
 public class DryRunReadinessChecker {
-    private static final EnumSet<TraceSnapshotType> REQUIRED = EnumSet.allOf(TraceSnapshotType.class);
+    private static final EnumSet<TraceSnapshotType> REQUIRED = EnumSet.of(
+            TraceSnapshotType.USER_INPUT,
+            TraceSnapshotType.CONTEXT_SUMMARY,
+            TraceSnapshotType.RETRIEVAL_SUMMARY,
+            TraceSnapshotType.MODEL_INPUT,
+            TraceSnapshotType.MODEL_OUTPUT,
+            TraceSnapshotType.TOOL_REQUEST,
+            TraceSnapshotType.TOOL_RESULT,
+            TraceSnapshotType.POLICY_INPUT,
+            TraceSnapshotType.POLICY_DECISION,
+            TraceSnapshotType.WORKFLOW_PATH,
+            TraceSnapshotType.FINAL_OUTPUT
+    );
     private final TraceQueryService traceQueryService;
     private final ObjectMapper objectMapper;
 

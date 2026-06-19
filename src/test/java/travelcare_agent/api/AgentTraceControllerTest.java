@@ -25,7 +25,7 @@ class AgentTraceControllerTest {
         TraceQueryService service=mock(TraceQueryService.class); TraceRun run=new TraceRun();run.setTraceId("trace-1");run.setSessionId(10L);run.setStatus("SUCCEEDED");
         when(service.get("trace-1")).thenReturn(new TraceQueryService.TraceDetail(run,List.of(),List.of(),List.of()));
         when(service.bySession(10L,1,20)).thenReturn(new TraceQueryService.TracePage(List.of(run),1,1,20));
-        when(service.diagnostics("trace-1")).thenReturn(new TraceQueryService.TraceDiagnostics("trace-1","SUCCEEDED","mock","mock-model","v1",List.of(),List.of(),List.of(),List.of(),List.of(),null,new TraceQueryService.RedactionSummary(0),List.of(),false));
+        when(service.diagnostics("trace-1")).thenReturn(new TraceQueryService.TraceDiagnostics("trace-1","SUCCEEDED","mock","mock-model","v1",List.of(),List.of(),List.of(),List.of(),List.of(),null,new TraceQueryService.RedactionSummary(0),List.of(),false,null,List.of(),List.of()));
         DiagnosticDryRunService dryRunService=mock(DiagnosticDryRunService.class);
         TraceDiffService diffService=mock(TraceDiffService.class);
         when(dryRunService.run(eq("trace-1"), any())).thenReturn(new DryRunResult(
