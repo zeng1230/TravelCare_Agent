@@ -60,6 +60,30 @@ class BaselinePromotionServiceTest {
                 .isInstanceOf(BusinessException.class);
     }
 
+    @Test
+    void rejectsPassedRunWithFailedErrorOrSkippedCounters() {
+        EvaluationRunRepository runs = mock(EvaluationRunRepository.class);
+        EvaluationDatasetRepository datasets = mock(EvaluationDatasetRepository.class);
+        EvaluationCaseResultRepository results = mock(EvaluationCaseResultRepository.class);
+        EvaluationBaselineRepository baselines = mock(EvaluationBaselineRepository.class);
+        EvaluationRun run = run("PASSED");
+        when(runs.findById(10L)).thenReturn(Optional.of(run));
+
+        run.setFailedCount(1);
+        assertThatThrownBy(() -> service(runs, datasets, results, baselines).promote(10L, "dev"))
+                .isInstanceOf(BusinessException.class);
+        run.setFailedCount(0);
+        run.setErrorCount(1);
+        assertThatThrownBy(() -> service(runs, datasets, results, baselines).promote(10L, "dev"))
+                .isInstanceOf(BusinessException.class);
+        run.setErrorCount(0);
+        run.setSkippedCount(1);
+        assertThatThrownBy(() -> service(runs, datasets, results, baselines).promote(10L, "dev"))
+                .isInstanceOf(BusinessException.class);
+
+        verifyNoInteractions(datasets, baselines);
+    }
+
     private BaselinePromotionService service(EvaluationRunRepository runs,
             EvaluationDatasetRepository datasets, EvaluationCaseResultRepository results,
             EvaluationBaselineRepository baselines) {
@@ -73,6 +97,9 @@ class BaselinePromotionServiceTest {
         run.setDatasetId(1L);
         run.setDatasetVersion(1);
         run.setStatus(status);
+        run.setFailedCount(0);
+        run.setErrorCount(0);
+        run.setSkippedCount(0);
         return run;
     }
 
