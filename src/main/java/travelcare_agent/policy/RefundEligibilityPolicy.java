@@ -27,8 +27,8 @@ public class RefundEligibilityPolicy {
     }
 
     @org.springframework.beans.factory.annotation.Autowired
-    public RefundEligibilityPolicy(TraceService traceService) {
-        this(Clock.systemDefaultZone(), traceService);
+    public RefundEligibilityPolicy(TraceService traceService, Clock clock) {
+        this(clock, traceService);
     }
 
     private RefundEligibilityPolicy(Clock clock, TraceService traceService) {

@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 
 @Service
@@ -46,6 +47,16 @@ public class DiagnosticDryRunService {
     }
 
     public DryRunResult run(String originalTraceId, DryRunRequest request) {
+        return runInternal(originalTraceId, request, "stage7b-dry-run", (answer, decision) -> answer);
+    }
+
+    public DryRunResult runForEvaluation(String originalTraceId, DryRunRequest request,
+            String promptVersion, BiFunction<String, String, String> responseRenderer) {
+        return runInternal(originalTraceId, request, promptVersion, responseRenderer);
+    }
+
+    private DryRunResult runInternal(String originalTraceId, DryRunRequest request,
+            String promptVersion, BiFunction<String, String, String> responseRenderer) {
         DryRunReadinessResult readiness = readinessChecker.check(originalTraceId, request.providerMode());
         if (!readiness.ready()) return DryRunResult.rejected(originalTraceId, readiness);
         TraceQueryService.TraceDetail original=traceQueryService.get(originalTraceId);
@@ -86,11 +97,12 @@ public class DiagnosticDryRunService {
 
             TraceService.SpanHandle model=traceService.startSpan(SpanType.MODEL,"dry-run-response-generation",Map.of("provider","mock"));
             traceService.recordSnapshot(root.traceId(),model.spanId(),TraceSnapshotType.MODEL_INPUT.name(),"MODEL_OPERATION","RESPONSE_GENERATION",Map.of(
-                    "operation","RESPONSE_GENERATION","promptVersion","stage7b-dry-run","input",Map.of("deterministicAnswer",simulation.deterministicAnswer())));
-            DryRunModelExecutor.ModelResult generated=dryRunModelExecutor.generate(simulation.deterministicAnswer());
+                    "operation","RESPONSE_GENERATION","promptVersion",promptVersion,"input",Map.of("deterministicAnswer",simulation.deterministicAnswer())));
+            String renderedAnswer=responseRenderer.apply(simulation.deterministicAnswer(),decision.status().name());
+            DryRunModelExecutor.ModelResult generated=dryRunModelExecutor.generate(renderedAnswer,promptVersion);
             traceService.recordSnapshot(root.traceId(),model.spanId(),TraceSnapshotType.MODEL_OUTPUT.name(),"MODEL_OPERATION","RESPONSE_GENERATION",Map.of(
-                    "operation","RESPONSE_GENERATION","provider",generated.provider(),"model",generated.model(),"promptVersion","stage7b-dry-run","output",generated.output()));
-            traceService.finishSpanSuccess(model,null,Map.of("provider",generated.provider(),"model",generated.model(),"promptVersion","stage7b-dry-run"));
+                    "operation","RESPONSE_GENERATION","provider",generated.provider(),"model",generated.model(),"promptVersion",promptVersion,"output",generated.output()));
+            traceService.finishSpanSuccess(model,null,Map.of("provider",generated.provider(),"model",generated.model(),"promptVersion",promptVersion));
 
             traceService.finishRootRunSuccess(root.traceId(),null,null,Map.of("answer",generated.answer()));
             TraceDiffResult diff=request.compareAfterRun()?traceDiffService.create(originalTraceId,root.traceId()):null;
