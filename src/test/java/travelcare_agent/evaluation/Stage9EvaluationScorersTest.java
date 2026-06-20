@@ -16,9 +16,10 @@ class Stage9EvaluationScorersTest {
     @Test
     void stage9ScorersReturnNotAppliedWhenSnapshotsAreMissing() throws Exception {
         EvaluationScoringContext c = context("""
-                {"expectedAnswerabilityStatus":"ANSWERABLE","requireCitation":true,
-                 "expectedCitationChunkIds":[101],"forbidExpiredCitation":true,
-                 "forbidRagBusinessOverride":true,"expectedRequiredAction":"FALLBACK_REPLY"}
+                {"expectedAnswerabilityStatus":"ANSWERABLE","expectCitationRequired":true,
+                 "expectedCitationChunkIds":[101],"expectedCitationDocumentIds":[201],
+                 "expectNoExpiredCitation":true,"expectBusinessDecisionLocked":true,
+                 "expectRagMayOverrideBusinessDecision":false,"expectedFallbackUsed":false}
                 """, false);
 
         assertThat(new AnswerabilityDecisionScorer().score(c).applied()).isFalse();
@@ -33,22 +34,28 @@ class Stage9EvaluationScorersTest {
     void answerabilityAndCitationScorersPassForValidStage9Metadata() throws Exception {
         EvaluationScoringContext c = context("""
                 {"expectedAnswerabilityStatus":"ANSWERABLE","expectedAnswerabilityReasonCode":"SUFFICIENT_CONTEXT",
-                 "requireCitation":true,"expectedCitationChunkIds":[101],"forbidExpiredCitation":true}
+                 "expectedRequiredAction":"ALLOW_MODEL","expectCitationRequired":true,
+                 "expectedCitationChunkIds":[101],"expectedCitationDocumentIds":[201],
+                 "expectNoExpiredCitation":true,"expectedFallbackUsed":false,
+                 "expectBusinessDecisionLocked":true,"expectRagMayOverrideBusinessDecision":false}
                 """, true);
 
-        assertThat(new AnswerabilityDecisionScorer().score(c).passed()).isTrue();
-        assertThat(new CitationRequiredScorer().score(c).passed()).isTrue();
-        assertThat(new CitationSourceScorer().score(c).passed()).isTrue();
-        assertThat(new ExpiredCitationScorer().score(c).passed()).isTrue();
+        assertAppliedAndPassed(new AnswerabilityDecisionScorer().score(c));
+        assertAppliedAndPassed(new CitationRequiredScorer().score(c));
+        assertAppliedAndPassed(new CitationSourceScorer().score(c));
+        assertAppliedAndPassed(new ExpiredCitationScorer().score(c));
+        assertAppliedAndPassed(new RagFallbackScorer().score(c));
+        assertAppliedAndPassed(new BusinessOverrideGuardScorer().score(c));
     }
 
     @Test
     void citationScorersFailForMissingOrExpiredFinalCitation() throws Exception {
         EvaluationScoringContext c = context("""
-                {"expectedCitationChunkIds":[999],"forbidExpiredCitation":true}
+                {"expectedCitationChunkIds":[999],"expectedCitationDocumentIds":[999],
+                 "expectNoExpiredCitation":true}
                 """, true);
         c.citations = json.readTree("""
-                [{"chunkId":101,"effectiveTo":"2026-01-01T00:00:00"}]
+                [{"chunkId":101,"documentId":201,"effectiveTo":"2026-01-01T00:00:00"}]
                 """);
 
         assertThat(new CitationSourceScorer().score(c).passed()).isFalse();
@@ -57,27 +64,65 @@ class Stage9EvaluationScorersTest {
 
     @Test
     void businessOverrideGuardFailsForOverrideOrUnlockedBusinessWorkflow() throws Exception {
-        EvaluationScoringContext override = context("{\"forbidRagBusinessOverride\":true}", true);
+        EvaluationScoringContext override = context("""
+                {"expectBusinessDecisionLocked":true,"expectRagMayOverrideBusinessDecision":false}
+                """, true);
         override.ragMayOverrideBusinessDecision = true;
-        assertThat(new BusinessOverrideGuardScorer().score(override).passed()).isFalse();
+        assertThat(new BusinessOverrideGuardScorer().score(override)).satisfies(result -> {
+            assertThat(result.applied()).isTrue();
+            assertThat(result.passed()).isFalse();
+        });
 
-        EvaluationScoringContext unlocked = context("{\"forbidRagBusinessOverride\":true}", true);
+        EvaluationScoringContext unlocked = context("""
+                {"expectBusinessDecisionLocked":true,"expectRagMayOverrideBusinessDecision":false}
+                """, true);
         unlocked.ragMayOverrideBusinessDecision = false;
         unlocked.businessDecisionLocked = false;
-        assertThat(new BusinessOverrideGuardScorer().score(unlocked).passed()).isFalse();
+        assertThat(new BusinessOverrideGuardScorer().score(unlocked)).satisfies(result -> {
+            assertThat(result.applied()).isTrue();
+            assertThat(result.passed()).isFalse();
+        });
     }
 
     @Test
     void fallbackScorerRequiresRequiredActionAndFallbackUsedMetadata() throws Exception {
-        EvaluationScoringContext pass = context("{\"expectedRequiredAction\":\"FALLBACK_REPLY\"}", true);
+        EvaluationScoringContext pass = context("""
+                {"expectedRequiredAction":"FALLBACK_REPLY","expectedFallbackUsed":true,
+                 "expectCitationRequired":false}
+                """, true);
+        pass.answerabilityStatus = "UNANSWERABLE";
         pass.requiredAction = "FALLBACK_REPLY";
         pass.fallbackUsed = true;
-        assertThat(new RagFallbackScorer().score(pass).passed()).isTrue();
+        pass.citations = json.createArrayNode();
+        assertAppliedAndPassed(new RagFallbackScorer().score(pass));
+        assertAppliedAndPassed(new CitationRequiredScorer().score(pass));
 
-        EvaluationScoringContext fail = context("{\"expectedRequiredAction\":\"FALLBACK_REPLY\"}", true);
+        EvaluationScoringContext fail = context("""
+                {"expectedRequiredAction":"FALLBACK_REPLY","expectedFallbackUsed":true}
+                """, true);
         fail.requiredAction = "FALLBACK_REPLY";
         fail.fallbackUsed = false;
-        assertThat(new RagFallbackScorer().score(fail).passed()).isFalse();
+        assertThat(new RagFallbackScorer().score(fail)).satisfies(result -> {
+            assertThat(result.applied()).isTrue();
+            assertThat(result.passed()).isFalse();
+        });
+    }
+
+    @Test
+    void expiredCitationScorerAppliesWhenExpiredCitationWasFiltered() throws Exception {
+        EvaluationScoringContext c = context("{\"expectNoExpiredCitation\":true}", true);
+        c.answerabilityStatus = "UNANSWERABLE";
+        c.citations = json.createArrayNode();
+        c.rejectedCitationCandidates = json.readTree("""
+                [{"chunkId":102,"documentId":202,"reasonCode":"EXPIRED_SOURCE"}]
+                """);
+
+        assertAppliedAndPassed(new ExpiredCitationScorer().score(c));
+    }
+
+    private void assertAppliedAndPassed(ScoreResult result) {
+        assertThat(result.applied()).isTrue();
+        assertThat(result.passed()).isTrue();
     }
 
     private EvaluationScoringContext context(String expectation, boolean withSnapshots) throws Exception {
@@ -95,12 +140,15 @@ class Stage9EvaluationScorersTest {
         if (withSnapshots) {
             c.answerabilityDecisionSnapshot = json.readTree("""
                     {"status":"ANSWERABLE","reasonCode":"SUFFICIENT_CONTEXT","requiredAction":"ALLOW_MODEL",
+                     "evidenceChunkIds":[101],
                      "businessDecisionLocked":true,"ragMayExplainBusinessDecision":true,
                      "ragMayOverrideBusinessDecision":false}
                     """);
             c.citationSummarySnapshot = json.readTree("""
-                    {"citations":[{"chunkId":101,"effectiveTo":"2026-12-31T00:00:00"}],
-                     "rejectedCitationCandidates":[{"chunkId":102,"reasonCode":"EXPIRED_SOURCE"}]}
+                    {"citations":[{"chunkId":101,"documentId":201,"retrievalRunId":"run-1",
+                                    "effectiveTo":"2026-12-31T00:00:00"}],
+                     "rejectedCitationCandidates":[{"chunkId":102,"documentId":202,
+                                                     "reasonCode":"EXPIRED_SOURCE"}]}
                     """);
             c.answerabilityStatus = "ANSWERABLE";
             c.answerabilityReasonCode = "SUFFICIENT_CONTEXT";
@@ -108,6 +156,7 @@ class Stage9EvaluationScorersTest {
             c.businessDecisionLocked = true;
             c.ragMayExplainBusinessDecision = true;
             c.ragMayOverrideBusinessDecision = false;
+            c.fallbackUsed = false;
             c.citations = c.citationSummarySnapshot.path("citations");
             c.rejectedCitationCandidates = c.citationSummarySnapshot.path("rejectedCitationCandidates");
         }

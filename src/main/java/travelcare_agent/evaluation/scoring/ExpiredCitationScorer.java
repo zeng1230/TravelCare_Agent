@@ -7,12 +7,14 @@ import java.time.LocalDateTime;
 public class ExpiredCitationScorer implements EvaluationScorer {
     public String name(){return "expiredCitation";}
     public ScoreResult score(EvaluationScoringContext c){
-        var expected=Stage9ScoringSupport.expectation(c,"forbidExpiredCitation");
-        if(expected==null||!expected.asBoolean(false))return ScoreResult.skipped(name());
+        Boolean expected=Stage9ScoringSupport.expectation(c).expectNoExpiredCitation();
+        if(expected==null)return ScoreResult.skipped(name());
         if(!Stage9ScoringSupport.hasStage9Snapshots(c))return ScoreResult.skipped(name());
         LocalDateTime now=c.clock==null?LocalDateTime.now():LocalDateTime.now(c.clock);
         boolean expired=Stage9ScoringSupport.containsExpiredCitation(c.citations(),now);
-        return ScoreResult.of(name(),!expired,true,Stage9ScoringSupport.actual(c),
-                expired?"expired citation present in final citations":"no expired citation in final citations");
+        boolean noExpired=!expired;
+        boolean matched=expected==noExpired;
+        return ScoreResult.of(name(),matched,expected,Stage9ScoringSupport.actual(c),
+                matched?"expired citation expectation matched":"expired citation expectation mismatch");
     }
 }

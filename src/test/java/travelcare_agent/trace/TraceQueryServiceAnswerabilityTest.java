@@ -81,6 +81,27 @@ class TraceQueryServiceAnswerabilityTest {
         });
     }
 
+    @Test
+    void diagnosticsUsesLatestPostPolicyBusinessLockSnapshot() {
+        TraceSnapshot beforePolicy = snapshot(TraceSnapshotType.ANSWERABILITY_DECISION.name(), """
+                {"status":"ANSWERABLE","reasonCode":"SUFFICIENT_CONTEXT","requiredAction":"ALLOW_MODEL",
+                 "evidenceChunkIds":[1001],"businessDecisionLocked":false,
+                 "ragMayExplainBusinessDecision":false,"ragMayOverrideBusinessDecision":false}
+                """);
+        TraceSnapshot afterPolicy = snapshot(TraceSnapshotType.ANSWERABILITY_DECISION.name(), """
+                {"status":"ANSWERABLE","reasonCode":"SUFFICIENT_CONTEXT","requiredAction":"ALLOW_MODEL",
+                 "evidenceChunkIds":[1001],"businessDecisionLocked":true,
+                 "ragMayExplainBusinessDecision":true,"ragMayOverrideBusinessDecision":false}
+                """);
+        TraceQueryService service = service("locked-trace", List.of(beforePolicy, afterPolicy));
+
+        TraceQueryService.TraceDiagnostics diagnostics = service.diagnostics("locked-trace");
+
+        assertThat(diagnostics.answerability().businessDecisionLocked()).isTrue();
+        assertThat(diagnostics.answerability().ragMayExplainBusinessDecision()).isTrue();
+        assertThat(diagnostics.answerability().ragMayOverrideBusinessDecision()).isFalse();
+    }
+
     private static TraceQueryService service(String traceId, List<TraceSnapshot> snapshots) {
         TraceRunRepository runs = mock(TraceRunRepository.class);
         TraceSpanRepository spans = mock(TraceSpanRepository.class);

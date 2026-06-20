@@ -244,6 +244,9 @@ public class SessionService {
             metaMap.put("answerabilityReasonCode", reply.answerabilityReasonCode());
             metaMap.put("requiredAction", reply.requiredAction());
             metaMap.put("fallbackUsed", reply.fallbackUsed());
+            metaMap.put("businessDecisionLocked", reply.businessDecisionLocked());
+            metaMap.put("ragMayExplainBusinessDecision", reply.ragMayExplainBusinessDecision());
+            metaMap.put("ragMayOverrideBusinessDecision", reply.ragMayOverrideBusinessDecision());
             metaMap.put("citations", reply.citations());
             metaMap.put("rejectedCitationCandidates", reply.rejectedCitationCandidates());
             String metaJson = "{}";
@@ -486,6 +489,9 @@ public class SessionService {
         values.put("answerabilityReasonCode", reply.answerabilityReasonCode());
         values.put("requiredAction", reply.requiredAction());
         values.put("fallbackUsed", reply.fallbackUsed());
+        values.put("businessDecisionLocked", reply.businessDecisionLocked());
+        values.put("ragMayExplainBusinessDecision", reply.ragMayExplainBusinessDecision());
+        values.put("ragMayOverrideBusinessDecision", reply.ragMayOverrideBusinessDecision());
         return values;
     }
 

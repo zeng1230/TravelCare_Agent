@@ -132,7 +132,16 @@ class SessionControllerTest {
                 null,
                 null,
                 List.of(snippet),
-                List.of(memory)
+                List.of(memory),
+                new travelcare_agent.answerability.AnswerabilityDecision(
+                        travelcare_agent.answerability.AnswerabilityStatus.ANSWERABLE,
+                        travelcare_agent.answerability.AnswerabilityReasonCode.SUFFICIENT_CONTEXT,
+                        travelcare_agent.answerability.AnswerabilityRequiredAction.ALLOW_MODEL,
+                        travelcare_agent.answerability.CitationPolicy.REQUIRED,
+                        List.of(501L), false, false, false,
+                        List.of(new travelcare_agent.answerability.CitationMetadata(
+                                "run-501", 501L, 10L, "Snippet SOP", "http://uri", null, null)),
+                        List.of(), null)
         );
         org.mockito.Mockito.when(contextAssembler.assemble(org.mockito.Mockito.eq(sessionId), org.mockito.Mockito.anyString()))
                 .thenReturn(mockContext);
@@ -148,7 +157,9 @@ class SessionControllerTest {
                 .andExpect(jsonPath("$.data.events[2].metadataJson", containsString("retrievalChunkIds")))
                 .andExpect(jsonPath("$.data.events[2].metadataJson", containsString("501")))
                 .andExpect(jsonPath("$.data.events[2].metadataJson", containsString("memoryIds")))
-                .andExpect(jsonPath("$.data.events[2].metadataJson", containsString("901")));
+                .andExpect(jsonPath("$.data.events[2].metadataJson", containsString("901")))
+                .andExpect(jsonPath("$.data.events[2].metadataJson", containsString("\"businessDecisionLocked\":true")))
+                .andExpect(jsonPath("$.data.events[2].metadataJson", containsString("\"ragMayOverrideBusinessDecision\":false")));
     }
 
     @Test
