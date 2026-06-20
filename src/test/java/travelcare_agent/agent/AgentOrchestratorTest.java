@@ -153,6 +153,49 @@ class AgentOrchestratorTest {
         );
     }
 
+    @Test
+    void locksAnswerabilityMetadataAfterRefundPolicyDecision() {
+        AgentOrchestrator orchestrator = orchestratorWithOrderAndContext(
+                new MockOrderAdapter.OrderSnapshot(
+                        13L,
+                        "ORD-13",
+                        1001L,
+                        OrderStatus.PAID,
+                        true,
+                        new BigDecimal("128.00"),
+                        LocalDateTime.now(CLOCK).plusHours(48)
+                ),
+                new AgentContext(
+                        List.of(),
+                        null,
+                        null,
+                        List.of(),
+                        List.of(),
+                        new AnswerabilityDecision(
+                                AnswerabilityStatus.ANSWERABLE,
+                                AnswerabilityReasonCode.SUFFICIENT_CONTEXT,
+                                AnswerabilityRequiredAction.ALLOW_MODEL,
+                                CitationPolicy.REQUIRED,
+                                List.of(101L),
+                                false,
+                                false,
+                                false,
+                                List.of(),
+                                List.of(),
+                                null
+                        )
+                ),
+                null
+        );
+
+        AgentOrchestrator.AgentReply reply = orchestrator.handle(
+                new AgentOrchestrator.AgentRequest(101L, 1001L, "refund ORD-13")
+        );
+
+        assertThat(reply.businessDecisionLocked()).isTrue();
+        assertThat(reply.ragMayOverrideBusinessDecision()).isFalse();
+    }
+
     private static AgentOrchestrator orchestratorWithOrder(MockOrderAdapter.OrderSnapshot order) {
         return orchestratorWithOrderAndContext(order, new travelcare_agent.agent.AgentContext(
                 List.of(),
