@@ -15,6 +15,10 @@ final class Stage9ScoringSupport {
         return c == null || c.expectation() == null ? null : c.expectation().get(field);
     }
 
+    static Stage9EvaluationExpectation expectation(EvaluationScoringContext c) {
+        return Stage9EvaluationExpectation.from(c == null ? null : c.expectation());
+    }
+
     static String text(JsonNode n) {
         return n == null || n.isNull() ? null : n.asText();
     }
@@ -38,6 +42,21 @@ final class Stage9ScoringSupport {
             if (chunkId != null && !chunkId.isNull()) values.add(chunkId.asLong());
         }
         return values;
+    }
+
+    static List<Long> documentIds(JsonNode citations) {
+        if (citations == null || !citations.isArray()) return List.of();
+        List<Long> values = new ArrayList<>();
+        for (JsonNode citation : citations) {
+            JsonNode documentId = citation.get("documentId");
+            if (documentId != null && !documentId.isNull()) values.add(documentId.asLong());
+        }
+        return values;
+    }
+
+    static List<Long> evidenceChunkIds(EvaluationScoringContext c) {
+        if (c == null || c.answerabilityDecisionSnapshot() == null) return List.of();
+        return longList(c.answerabilityDecisionSnapshot().path("evidenceChunkIds"));
     }
 
     static boolean containsExpiredCitation(JsonNode citations, LocalDateTime now) {
@@ -64,6 +83,8 @@ final class Stage9ScoringSupport {
         actual.put("ragMayExplainBusinessDecision", c.ragMayExplainBusinessDecision());
         actual.put("ragMayOverrideBusinessDecision", c.ragMayOverrideBusinessDecision());
         actual.put("citationChunkIds", chunkIds(c.citations()));
+        actual.put("citationDocumentIds", documentIds(c.citations()));
+        actual.put("evidenceChunkIds", evidenceChunkIds(c));
         actual.put("rejectedCitationCandidates", c.rejectedCitationCandidates());
         return actual;
     }
