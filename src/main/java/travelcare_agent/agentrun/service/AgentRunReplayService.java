@@ -68,7 +68,9 @@ public class AgentRunReplayService {
         List<Long> retrievalChunkIds = parseIds(run.getRetrievalChunkIdsJson());
         List<Long> memoryIds = parseIds(run.getMemoryIdsJson());
 
-        List<SessionEvent> sessionEvents = sessionEventRepository.findBySessionIdOrderBySeqNo(run.getSessionId());
+        List<SessionEvent> sessionEvents = run.getSessionId() == null
+                ? List.of()
+                : sessionEventRepository.findBySessionIdOrderBySeqNo(run.getSessionId());
         Map<Long, SessionEvent> eventsById = sessionEvents.stream()
                 .collect(Collectors.toMap(SessionEvent::getId, Function.identity(), (left, right) -> left));
 
@@ -154,9 +156,11 @@ public class AgentRunReplayService {
     private List<AuditActionReplay> auditActions(AgentRun run) {
         Set<Long> seen = new LinkedHashSet<>();
         java.util.ArrayList<AuditLog> logs = new java.util.ArrayList<>();
-        for (AuditLog log : auditLogRepository.findBySessionId(run.getSessionId())) {
-            if (log.getId() != null && seen.add(log.getId())) {
-                logs.add(log);
+        if (run.getSessionId() != null) {
+            for (AuditLog log : auditLogRepository.findBySessionId(run.getSessionId())) {
+                if (log.getId() != null && seen.add(log.getId())) {
+                    logs.add(log);
+                }
             }
         }
         if (run.getWorkflowId() != null) {
@@ -226,10 +230,19 @@ public class AgentRunReplayService {
             Long taskId,
             String runType,
             String source,
+            String providerMode,
             String provider,
             String model,
+            String fallbackProvider,
+            String fallbackModel,
             String status,
             String promptVersion,
+            String requestHash,
+            String responseHash,
+            Integer inputTokens,
+            Integer outputTokens,
+            Integer totalTokens,
+            Boolean fallbackUsed,
             String responseTemplateVersion,
             String contextHash,
             String answerHash,
@@ -247,10 +260,19 @@ public class AgentRunReplayService {
                     run.getTaskId(),
                     run.getRunType(),
                     run.getSource(),
+                    run.getProviderMode(),
                     run.getProvider(),
                     run.getModel(),
+                    run.getFallbackProvider(),
+                    run.getFallbackModel(),
                     run.getStatus(),
                     run.getPromptVersion(),
+                    run.getRequestHash(),
+                    run.getResponseHash(),
+                    run.getInputTokens(),
+                    run.getOutputTokens(),
+                    run.getTotalTokens(),
+                    run.getFallbackUsed(),
                     run.getResponseTemplateVersion(),
                     run.getContextHash(),
                     run.getAnswerHash(),

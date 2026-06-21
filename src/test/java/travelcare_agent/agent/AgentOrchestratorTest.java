@@ -139,7 +139,8 @@ class AgentOrchestratorTest {
                 modelService
         );
         org.mockito.Mockito.when(modelService.classifyIntentAndExtractSlots(
-                org.mockito.Mockito.anyLong(), org.mockito.Mockito.isNull(), org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()
+                org.mockito.Mockito.anyLong(), org.mockito.Mockito.isNull(), org.mockito.Mockito.anyList(),
+                org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()
         )).thenReturn(new MockIntentClassifier.IntentResult("FAQ", "ORD-12"));
 
         AgentOrchestrator.AgentReply reply = orchestrator.handle(
@@ -149,7 +150,8 @@ class AgentOrchestratorTest {
         assertThat(reply.answer()).contains("I don't have enough verified knowledge");
         assertThat(reply.answerabilityStatus()).isEqualTo("UNANSWERABLE");
         verify(modelService, never()).generateCustomerAnswer(
-                org.mockito.Mockito.anyLong(), org.mockito.Mockito.anyLong(), org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()
+                org.mockito.Mockito.anyLong(), org.mockito.Mockito.anyLong(), org.mockito.Mockito.anyList(),
+                org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()
         );
     }
 

@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import travelcare_agent.agentrun.entity.AgentRun;
 import travelcare_agent.agentrun.repository.AgentRunRepository;
 import travelcare_agent.common.exception.BusinessException;
@@ -25,6 +27,8 @@ import java.util.HexFormat;
 
 @Service
 public class AgentRunService {
+
+    private static final Logger log = LoggerFactory.getLogger(AgentRunService.class);
 
     public static final String PROMPT_VERSION = "mock-agent-v1";
     public static final String RESPONSE_TEMPLATE_VERSION = "refund-inquiry-template-v1";
@@ -74,49 +78,60 @@ public class AgentRunService {
     }
 
     @Transactional
-    public AgentRun recordModelCall(
-            Long sessionId,
-            Long workflowId,
-            String runType,
-            String provider,
-            String model,
-            String promptVersion,
-            List<Long> inputEventIds,
-            String requestJson,
-            String responseJson,
-            Integer inputTokens,
-            Integer outputTokens,
-            long latencyMs,
-            String status,
-            String errorCode
-    ) {
-        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.AGENT_RUN_WRITE);
-        LocalDateTime now = LocalDateTime.now();
-        AgentRun run = new AgentRun();
-        run.setSessionId(sessionId);
-        run.setWorkflowId(workflowId);
-        run.setRunType(runType);
-        run.setSource("agent_model_service");
-        run.setProvider(provider);
-        run.setModel(model);
-        run.setPromptVersion(promptVersion);
-        run.setResponseTemplateVersion(promptVersion);
-        run.setInputEventIdsJson(toJsonArray(inputEventIds));
-        run.setRetrievalChunkIdsJson("[]");
-        run.setMemoryIdsJson("[]");
-        run.setRequestJson(requestJson);
-        run.setResponseJson(responseJson);
-        run.setInputTokens(inputTokens);
-        run.setOutputTokens(outputTokens);
-        run.setLatencyMs(Math.max(0L, latencyMs));
-        run.setStatus(status);
-        run.setErrorCode(errorCode);
-        run.setCreatedBy("AGENT_PROVIDER");
-        run.setCreatedAt(now);
-        run.setUpdatedAt(now);
-        TraceContextHolder.TraceContext trace = TraceContextHolder.current();
-        if (trace != null) { run.setTraceId(trace.traceId()); run.setSpanId(trace.spanId()); }
-        return repository.save(run);
+    public AgentRun startModelCall(ModelCallStart start) {
+        try {
+            travelcare_agent.dryrun.SideEffectGuard.checkCurrent(
+                    travelcare_agent.dryrun.SideEffectOperation.AGENT_RUN_WRITE);
+            LocalDateTime now = LocalDateTime.now();
+            AgentRun run = new AgentRun();
+            run.setSessionId(start.sessionId());
+            run.setWorkflowId(start.workflowId());
+            run.setRunType(start.operation());
+            run.setSource("agent_model_service");
+            run.setProviderMode(start.providerMode());
+            run.setProvider(start.provider());
+            run.setModel(start.model());
+            run.setPromptVersion(start.promptVersion());
+            run.setResponseTemplateVersion(start.promptVersion());
+            run.setInputEventIdsJson(toJsonArray(start.inputEventIds()));
+            run.setRetrievalChunkIdsJson(toJsonArray(start.retrievalContextIds()));
+            run.setMemoryIdsJson("[]");
+            run.setRequestHash(start.requestHash());
+            run.setFallbackUsed(false);
+            run.setStatus("RUNNING");
+            run.setCreatedBy("AGENT_PROVIDER");
+            run.setCreatedAt(now);
+            run.setUpdatedAt(now);
+            TraceContextHolder.TraceContext trace = TraceContextHolder.current();
+            if (trace != null) { run.setTraceId(trace.traceId()); run.setSpanId(trace.spanId()); }
+            return repository.save(run);
+        } catch (RuntimeException ex) {
+            log.warn("Agent run start persistence failed for operation={}", safeCode(start.operation()));
+            return null;
+        }
+    }
+
+    @Transactional
+    public void completeModelCall(AgentRun run, ModelCallCompletion completion) {
+        if (run == null) {
+            return;
+        }
+        try {
+            run.setFallbackProvider(completion.fallbackProvider());
+            run.setFallbackModel(completion.fallbackModel());
+            run.setResponseHash(completion.responseHash());
+            run.setInputTokens(completion.inputTokens());
+            run.setOutputTokens(completion.outputTokens());
+            run.setTotalTokens(completion.totalTokens());
+            run.setFallbackUsed(completion.fallbackUsed());
+            run.setLatencyMs(Math.max(0L, completion.latencyMs()));
+            run.setStatus(completion.status());
+            run.setErrorCode(safeNullableCode(completion.errorCode()));
+            run.setErrorMessage(safeSummary(completion.errorMessageSanitized()));
+            repository.save(run);
+        } catch (RuntimeException ex) {
+            log.warn("Agent run completion persistence failed for operation={}", safeCode(run.getRunType()));
+        }
     }
 
     @Transactional
@@ -267,7 +282,12 @@ public class AgentRunService {
 
     private boolean isTerminal(AgentRun run) {
         String status = run.getStatus();
-        return "SUCCEEDED".equals(status) || (status != null && status.startsWith("FAILED_"));
+        return "SUCCEEDED".equals(status)
+                || "SUCCESS".equals(status)
+                || "FAILED".equals(status)
+                || "FALLBACK_SUCCESS".equals(status)
+                || "FALLBACK_FAILED".equals(status)
+                || (status != null && status.startsWith("FAILED_"));
     }
 
     private String safeErrorMessage(Throwable error) {
@@ -276,6 +296,35 @@ public class AgentRunService {
         }
         String message = error.getMessage().replace('\n', ' ').replace('\r', ' ');
         return message.length() <= 512 ? message : message.substring(0, 512);
+    }
+
+    public String hashCanonical(Object value) {
+        try {
+            return sha256(canonicalMapper.writeValueAsString(value));
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to hash canonical model evidence", ex);
+        }
+    }
+
+    private static String safeNullableCode(String value) {
+        return value == null ? null : safeCode(value);
+    }
+
+    private static String safeCode(String value) {
+        if (value == null || !value.matches("[A-Z0-9_]{1,64}")) {
+            return "UNKNOWN";
+        }
+        return value;
+    }
+
+    private static String safeSummary(String value) {
+        if (value == null) {
+            return null;
+        }
+        String primaryOnly = "Primary model attempt failed: [A-Z0-9_]{1,64}";
+        String primaryAndFallback = primaryOnly
+                + "; fallback model attempt failed: [A-Z0-9_]{1,64}";
+        return value.matches(primaryOnly) || value.matches(primaryAndFallback) ? value : null;
     }
 
     private String sha256(String value) {
@@ -304,5 +353,34 @@ public class AgentRunService {
     }
 
     public record AgentRunPage(List<AgentRun> records, long total, long pageNo, long pageSize) {
+    }
+
+    public record ModelCallStart(
+            Long sessionId,
+            Long workflowId,
+            String operation,
+            String providerMode,
+            String provider,
+            String model,
+            String promptVersion,
+            List<Long> inputEventIds,
+            List<Long> retrievalContextIds,
+            String requestHash
+    ) {
+    }
+
+    public record ModelCallCompletion(
+            String fallbackProvider,
+            String fallbackModel,
+            String responseHash,
+            Integer inputTokens,
+            Integer outputTokens,
+            Integer totalTokens,
+            boolean fallbackUsed,
+            long latencyMs,
+            String status,
+            String errorCode,
+            String errorMessageSanitized
+    ) {
     }
 }

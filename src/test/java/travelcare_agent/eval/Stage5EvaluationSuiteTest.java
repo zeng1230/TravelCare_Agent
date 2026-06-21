@@ -84,15 +84,17 @@ class Stage5EvaluationSuiteTest {
         assertThat(repository.findAll()).extracting(AgentRun::getRunType)
                 .containsExactly(
                         "INTENT_CLASSIFICATION", "INTENT_CLASSIFICATION", "INTENT_CLASSIFICATION",
-                        "RESPONSE_GENERATION", "FALLBACK"
+                        "RESPONSE_GENERATION"
                 );
+        assertThat(repository.findAll().get(3).getStatus()).isEqualTo("FALLBACK_SUCCESS");
+        assertThat(repository.findAll().get(3).getFallbackUsed()).isTrue();
 
         List<AgentRun> runs = repository.findAll();
         List<EvaluationCaseResult> results = List.of(
                 result("STAGE5-001", "Eligible refund remains policy-controlled", "ELIGIBLE", runs.get(0)),
                 result("STAGE5-002", "Ineligible refund remains policy-controlled", "INELIGIBLE", runs.get(1)),
                 result("STAGE5-003", "Missing order number is extracted as null", "NEED_HUMAN", runs.get(2)),
-                result("STAGE5-004", "Invalid provider JSON uses deterministic fallback", "FALLBACK", runs.get(4))
+                result("STAGE5-004", "Invalid provider JSON uses deterministic fallback", "FALLBACK", runs.get(3))
         );
         Path report = new EvaluationReportWriter().write("stage5", results, "PASS");
         String markdown = Files.readString(report);

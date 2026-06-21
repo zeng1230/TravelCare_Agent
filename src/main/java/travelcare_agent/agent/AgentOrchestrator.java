@@ -94,10 +94,13 @@ public class AgentOrchestrator {
         List<Long> contextEventIds = agentContext.recentEvents().stream()
                 .map(SessionEvent::getId)
                 .toList();
+        List<Long> retrievalChunkIds = agentContext.policySnippets().stream()
+                .map(RetrievalSnippet::chunkId)
+                .toList();
         MockIntentClassifier.IntentResult intent = agentModelService == null
                 ? intentClassifier.classify(request.message())
                 : agentModelService.classifyIntentAndExtractSlots(
-                        request.sessionId(), null, contextEventIds, request.message()
+                        request.sessionId(), null, contextEventIds, retrievalChunkIds, request.message()
                 );
         WorkflowEngine.WorkflowResult workflowResult;
         try {
@@ -163,16 +166,14 @@ public class AgentOrchestrator {
                 answer = agentModelService == null
                     ? deterministicAnswer
                     : agentModelService.generateCustomerAnswer(
-                            request.sessionId(), workflowResult.workflow().getId(), contextEventIds, deterministicAnswer
+                            request.sessionId(), workflowResult.workflow().getId(), contextEventIds,
+                            retrievalChunkIds, deterministicAnswer
                     );
             }
         } catch (RuntimeException ex) {
             throw new AgentStageException("FAILED_GENERATION", "RESPONSE_GENERATION_FAILED", agentContext, workflowResult.workflow().getId(), ex);
         }
 
-        List<Long> retrievalChunkIds = agentContext.policySnippets().stream()
-                .map(RetrievalSnippet::chunkId)
-                .toList();
         List<Long> documentIds = agentContext.policySnippets().stream()
                 .map(RetrievalSnippet::documentId)
                 .distinct()
