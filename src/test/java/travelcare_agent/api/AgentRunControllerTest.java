@@ -47,8 +47,12 @@ class AgentRunControllerTest {
                 .andExpect(jsonPath("$.data.workflowId").value(200L))
                 .andExpect(jsonPath("$.data.taskId").value(300L))
                 .andExpect(jsonPath("$.data.status").value("SUCCEEDED"))
+                .andExpect(jsonPath("$.data.operation").value("SYNC_REPLY"))
                 .andExpect(jsonPath("$.data.inputEventIds[0]").value(11L))
                 .andExpect(jsonPath("$.data.retrievalChunkIds[0]").value(21L))
+                .andExpect(jsonPath("$.data.retrievalContextIds[0]").value(21L))
+                .andExpect(jsonPath("$.data.requestJson").doesNotExist())
+                .andExpect(jsonPath("$.data.responseJson").doesNotExist())
                 .andExpect(jsonPath("$.data.memoryIds[0]").value(31L))
                 .andExpect(jsonPath("$.data.outputEventId").value(41L));
     }

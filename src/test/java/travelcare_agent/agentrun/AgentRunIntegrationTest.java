@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.jdbc.core.JdbcTemplate;
 import travelcare_agent.agentrun.entity.AgentRun;
 import travelcare_agent.agentrun.repository.AgentRunRepository;
 import travelcare_agent.conversation.service.SessionService;
@@ -30,6 +31,37 @@ class AgentRunIntegrationTest {
     @Autowired
     private WorkflowTaskWorker workflowTaskWorker;
     @Autowired private TraceQueryService traceQueryService;
+    @Autowired private JdbcTemplate jdbcTemplate;
+
+    @Test
+    void stage10bMigrationRemovesPayloadColumnsAndAllowsNullSession() {
+        String sessionNullable = jdbcTemplate.queryForObject("""
+                SELECT IS_NULLABLE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'agent_runs'
+                  AND COLUMN_NAME = 'session_id'
+                """, String.class);
+        Integer removedPayloadColumns = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'agent_runs'
+                  AND COLUMN_NAME IN ('request_json', 'response_json')
+                """, Integer.class);
+        Integer trackingColumns = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'agent_runs'
+                  AND COLUMN_NAME IN ('provider_mode', 'fallback_provider', 'fallback_model',
+                                      'request_hash', 'response_hash', 'total_tokens', 'fallback_used')
+                """, Integer.class);
+
+        assertThat(sessionNullable).isEqualTo("YES");
+        assertThat(removedPayloadColumns).isZero();
+        assertThat(trackingColumns).isEqualTo(7);
+    }
 
     @Test
     void synchronousMessageWritesSucceededAgentRun() {
@@ -94,6 +126,17 @@ class AgentRunIntegrationTest {
         assertThat(agentRunRepository.findBySessionId(sessionId, 1, 20))
                 .extracting(AgentRun::getRunType)
                 .contains("INTENT_CLASSIFICATION", "RESPONSE_GENERATION");
+        assertThat(agentRunRepository.findBySessionId(sessionId, 1, 20))
+                .filteredOn(run -> "agent_model_service".equals(run.getSource()))
+                .hasSize(2)
+                .allSatisfy(run -> {
+                    assertThat(run.getStatus()).isEqualTo("SUCCESS");
+                    assertThat(run.getProviderMode()).isEqualTo("mock");
+                    assertThat(run.getPromptVersion()).isIn("intent-classifier-v1", "response-generator-v1");
+                    assertThat(run.getRequestHash()).hasSize(64);
+                    assertThat(run.getResponseHash()).hasSize(64);
+                    assertThat(run.getFallbackUsed()).isFalse();
+                });
     }
 
     @Test

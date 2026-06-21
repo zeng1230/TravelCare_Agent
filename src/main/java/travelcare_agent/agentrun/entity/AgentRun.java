@@ -17,12 +17,17 @@ public class AgentRun {
     private String correlationId;
     private String runType;
     private String source;
+    private String providerMode;
     private String provider;
     private String model;
-    private String requestJson;
-    private String responseJson;
+    private String fallbackProvider;
+    private String fallbackModel;
+    private String requestHash;
+    private String responseHash;
     private Integer inputTokens;
     private Integer outputTokens;
+    private Integer totalTokens;
+    private Boolean fallbackUsed;
     private String inputEventIdsJson;
     private String retrievalChunkIdsJson;
     private String memoryIdsJson;
@@ -115,20 +120,44 @@ public class AgentRun {
         this.model = model;
     }
 
-    public String getRequestJson() {
-        return requestJson;
+    public String getProviderMode() {
+        return providerMode;
     }
 
-    public void setRequestJson(String requestJson) {
-        this.requestJson = requestJson;
+    public void setProviderMode(String providerMode) {
+        this.providerMode = providerMode;
     }
 
-    public String getResponseJson() {
-        return responseJson;
+    public String getFallbackProvider() {
+        return fallbackProvider;
     }
 
-    public void setResponseJson(String responseJson) {
-        this.responseJson = responseJson;
+    public void setFallbackProvider(String fallbackProvider) {
+        this.fallbackProvider = fallbackProvider;
+    }
+
+    public String getFallbackModel() {
+        return fallbackModel;
+    }
+
+    public void setFallbackModel(String fallbackModel) {
+        this.fallbackModel = fallbackModel;
+    }
+
+    public String getRequestHash() {
+        return requestHash;
+    }
+
+    public void setRequestHash(String requestHash) {
+        this.requestHash = requestHash;
+    }
+
+    public String getResponseHash() {
+        return responseHash;
+    }
+
+    public void setResponseHash(String responseHash) {
+        this.responseHash = responseHash;
     }
 
     public Integer getInputTokens() {
@@ -145,6 +174,22 @@ public class AgentRun {
 
     public void setOutputTokens(Integer outputTokens) {
         this.outputTokens = outputTokens;
+    }
+
+    public Integer getTotalTokens() {
+        return totalTokens;
+    }
+
+    public void setTotalTokens(Integer totalTokens) {
+        this.totalTokens = totalTokens;
+    }
+
+    public Boolean getFallbackUsed() {
+        return Boolean.TRUE.equals(fallbackUsed);
+    }
+
+    public void setFallbackUsed(Boolean fallbackUsed) {
+        this.fallbackUsed = fallbackUsed;
     }
 
     public String getInputEventIdsJson() {

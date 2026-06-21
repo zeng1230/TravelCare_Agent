@@ -54,7 +54,9 @@ class Stage9EvaluationReportWriterTest {
                 Clock.fixed(Instant.parse("2026-06-15T00:00:00Z"), ZoneOffset.UTC));
 
         assertThat(writer.read(7L))
-                .contains("### Answerability / Citation",
+                .contains("Provider mode: mock",
+                        "Prompt version: stage8-default",
+                        "### Answerability / Citation",
                         "answerabilityStatus: ANSWERABLE",
                         "citationChunkIds: [101]",
                         "ragMayOverrideBusinessDecision: false",

@@ -206,7 +206,7 @@ public class WorkflowTaskWorker {
             MockIntentClassifier.IntentResult intent = agentModelService == null
                     ? intentClassifier.classify(content)
                     : agentModelService.classifyIntentAndExtractSlots(
-                            task.getSessionId(), task.getWorkflowId(), modelInputEventIds, content
+                            task.getSessionId(), task.getWorkflowId(), modelInputEventIds, List.of(), content
                     );
             
             WorkflowEngine.WorkflowCommand command = new WorkflowEngine.WorkflowCommand(
@@ -247,10 +247,14 @@ public class WorkflowTaskWorker {
             String answer;
             try {
                 String deterministicAnswer = responseGenerator.generate(intent, result, agentContext);
+                List<Long> retrievalContextIds = agentContext.policySnippets().stream()
+                        .map(travelcare_agent.retrieval.service.RetrievalSnippet::chunkId)
+                        .toList();
                 answer = agentModelService == null
                         ? deterministicAnswer
                         : agentModelService.generateCustomerAnswer(
-                                task.getSessionId(), task.getWorkflowId(), modelInputEventIds, deterministicAnswer
+                                task.getSessionId(), task.getWorkflowId(), modelInputEventIds,
+                                retrievalContextIds, deterministicAnswer
                         );
             } catch (RuntimeException ex) {
                 safeMarkFailed(agentRun, "FAILED_GENERATION", "RESPONSE_GENERATION_FAILED", ex);
