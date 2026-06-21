@@ -6,28 +6,33 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import travelcare_agent.agent.prompt.PromptTemplateService;
-import travelcare_agent.agent.provider.AgentProvider;
 import travelcare_agent.agent.provider.AgentProviderProperties;
-import travelcare_agent.agent.provider.AgentProviderRequest;
-import travelcare_agent.agent.provider.AgentProviderResponse;
-import travelcare_agent.agent.provider.DeepSeekAgentProvider;
-import travelcare_agent.agent.provider.MockAgentProvider;
+import travelcare_agent.agent.provider.ChatModelProvider;
+import travelcare_agent.agent.provider.MockChatModelProvider;
+import travelcare_agent.agent.provider.ModelCallException;
+import travelcare_agent.agent.provider.ModelMessage;
+import travelcare_agent.agent.provider.ModelRequest;
+import travelcare_agent.agent.provider.ModelResponse;
+import travelcare_agent.agent.provider.ModelUsage;
 import travelcare_agent.agentrun.service.AgentRunService;
-import travelcare_agent.common.exception.BusinessException;
-import travelcare_agent.common.result.ResultCode;
+import travelcare_agent.trace.SpanType;
+import travelcare_agent.trace.TraceContextHolder;
+import travelcare_agent.trace.TraceEventType;
+import travelcare_agent.trace.TraceService;
+import travelcare_agent.trace.TraceSnapshotType;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import travelcare_agent.trace.*;
 
 @Service
 public class AgentModelService {
 
-    private final AgentProvider primaryProvider;
-    private final MockAgentProvider fallbackProvider;
+    private final ChatModelProvider primaryProvider;
+    private final MockChatModelProvider fallbackProvider;
+    private final AgentProviderProperties properties;
     private final PromptTemplateService promptTemplateService;
     private final AgentRunService agentRunService;
     private final ObjectMapper objectMapper;
@@ -35,50 +40,32 @@ public class AgentModelService {
 
     @Autowired
     public AgentModelService(
+            ChatModelProvider primaryProvider,
+            MockChatModelProvider fallbackProvider,
             AgentProviderProperties properties,
-            MockAgentProvider mockAgentProvider,
-            DeepSeekAgentProvider deepSeekAgentProvider,
             PromptTemplateService promptTemplateService,
             AgentRunService agentRunService,
             ObjectMapper objectMapper,
             TraceService traceService
     ) {
-        this(
-                "deepseek".equalsIgnoreCase(properties.getProvider()) ? deepSeekAgentProvider : mockAgentProvider,
-                mockAgentProvider,
-                promptTemplateService,
-                agentRunService,
-                objectMapper,
-                traceService
-        );
-    }
-
-    public AgentModelService(AgentProviderProperties properties, MockAgentProvider mockAgentProvider,
-            DeepSeekAgentProvider deepSeekAgentProvider, PromptTemplateService promptTemplateService,
-            AgentRunService agentRunService, ObjectMapper objectMapper) {
-        this("deepseek".equalsIgnoreCase(properties.getProvider()) ? deepSeekAgentProvider : mockAgentProvider,
-                mockAgentProvider, promptTemplateService, agentRunService, objectMapper, null);
-    }
-
-    public AgentModelService(
-            AgentProvider primaryProvider,
-            MockAgentProvider fallbackProvider,
-            PromptTemplateService promptTemplateService,
-            AgentRunService agentRunService,
-            ObjectMapper objectMapper
-    ) {
-        this(primaryProvider, fallbackProvider, promptTemplateService, agentRunService, objectMapper, null);
-    }
-
-    public AgentModelService(AgentProvider primaryProvider, MockAgentProvider fallbackProvider,
-            PromptTemplateService promptTemplateService, AgentRunService agentRunService,
-            ObjectMapper objectMapper, TraceService traceService) {
         this.primaryProvider = primaryProvider;
         this.fallbackProvider = fallbackProvider;
+        this.properties = properties;
         this.promptTemplateService = promptTemplateService;
         this.agentRunService = agentRunService;
         this.objectMapper = objectMapper;
         this.traceService = traceService;
+    }
+
+    public AgentModelService(
+            ChatModelProvider primaryProvider,
+            MockChatModelProvider fallbackProvider,
+            PromptTemplateService promptTemplateService,
+            AgentRunService agentRunService,
+            ObjectMapper objectMapper
+    ) {
+        this(primaryProvider, fallbackProvider, new AgentProviderProperties(), promptTemplateService,
+                agentRunService, objectMapper, null);
     }
 
     public MockIntentClassifier.IntentResult classifyIntentAndExtractSlots(
@@ -130,23 +117,32 @@ public class AgentModelService {
             String promptVersion,
             Map<String, Object> input
     ) {
-        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.EXTERNAL_PROVIDER_CALL);
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(
+                travelcare_agent.dryrun.SideEffectOperation.EXTERNAL_PROVIDER_CALL
+        );
         String requestJson = toJson(input);
         String prompt = promptTemplateService.render(promptVersion, requestJson);
-        AgentProviderRequest request = new AgentProviderRequest(runType, promptVersion, prompt, input);
-        if (traceService != null) traceService.recordCurrentSnapshot(TraceSnapshotType.MODEL_INPUT,
-                "MODEL_OPERATION", runType, Map.of(
-                        "operation", runType,
-                        "promptVersion", promptVersion,
-                        "input", input
-                ));
+        Map<String, Object> metadata = new LinkedHashMap<>(input);
+        metadata.put("operation", runType);
+        ModelRequest request = new ModelRequest(
+                properties.getModel(),
+                promptVersion,
+                List.of(new ModelMessage("user", prompt)),
+                properties.getTemperature(),
+                properties.getTimeoutMs(),
+                metadata
+        );
+        if (traceService != null) {
+            traceService.recordCurrentSnapshot(TraceSnapshotType.MODEL_INPUT,
+                    "MODEL_OPERATION", runType, Map.of(
+                            "operation", runType,
+                            "promptVersion", promptVersion,
+                            "input", input
+                    ));
+        }
         try {
-            return invokeAndRecord(sessionId, workflowId, inputEventIds, runType, promptVersion, requestJson, primaryProvider, request);
-        } catch (BusinessException ex) {
-            if (ex.getResultCode() == ResultCode.DEEPSEEK_API_KEY_MISSING) {
-                throw ex;
-            }
-            return fallback(sessionId, workflowId, inputEventIds, promptVersion, requestJson, request);
+            return invokeAndRecord(sessionId, workflowId, inputEventIds, runType, promptVersion,
+                    requestJson, primaryProvider, request);
         } catch (RuntimeException ex) {
             return fallback(sessionId, workflowId, inputEventIds, promptVersion, requestJson, request);
         }
@@ -158,15 +154,18 @@ public class AgentModelService {
             List<Long> inputEventIds,
             String promptVersion,
             String requestJson,
-            AgentProviderRequest request
+            ModelRequest request
     ) {
         TraceContextHolder.TraceContext context = TraceContextHolder.current();
-        if (traceService != null && context != null) traceService.recordEvent(context.traceId(), context.spanId(),
-                TraceEventType.FALLBACK, "model-provider-fallback", Map.of("provider", fallbackProvider.name()));
+        if (traceService != null && context != null) {
+            traceService.recordEvent(context.traceId(), context.spanId(), TraceEventType.FALLBACK,
+                    "model-provider-fallback", Map.of("provider", fallbackProvider.providerName()));
+        }
         try {
-            return invokeAndRecord(sessionId, workflowId, inputEventIds, "FALLBACK", promptVersion, requestJson, fallbackProvider, request);
+            return invokeAndRecord(sessionId, workflowId, inputEventIds, "FALLBACK", promptVersion,
+                    requestJson, fallbackProvider, request);
         } catch (RuntimeException ex) {
-            throw new IllegalStateException("AGENT_PROVIDER_FALLBACK_FAILED");
+            throw new ModelCallException("MODEL_FALLBACK_FAILED", "Deterministic model fallback failed", ex);
         }
     }
 
@@ -177,82 +176,122 @@ public class AgentModelService {
             String persistedRunType,
             String promptVersion,
             String requestJson,
-            AgentProvider provider,
-            AgentProviderRequest request
+            ChatModelProvider provider,
+            ModelRequest request
     ) {
         Instant startedAt = Instant.now();
         TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
                 : traceService.startSpan("FALLBACK".equals(persistedRunType) ? SpanType.FALLBACK : SpanType.MODEL,
-                persistedRunType, Map.of("provider", provider.name(), "promptVersion", promptVersion));
-        AgentProviderResponse response = null;
+                persistedRunType, Map.of("provider", provider.providerName(), "promptVersion", promptVersion));
+        ModelResponse response = null;
         try {
-            response = provider.invoke(request);
-            JsonNode parsed = objectMapper.readTree(response.rawText());
-            validateResponse(request.operation(), parsed);
+            response = provider.call(request);
+            if (response == null || response.content() == null || response.content().isBlank()) {
+                throw new ModelCallException("MODEL_EMPTY_RESPONSE", "Model returned empty content");
+            }
+            JsonNode parsed = objectMapper.readTree(response.content());
+            validateResponse(request.metadata().get("operation"), parsed);
             if (traceService != null) {
                 Map<String, Object> outputSnapshot = new LinkedHashMap<>();
-                outputSnapshot.put("operation", request.operation());
-                outputSnapshot.put("provider", provider.name());
+                outputSnapshot.put("operation", request.metadata().get("operation"));
+                outputSnapshot.put("provider", provider.providerName());
                 outputSnapshot.put("model", response.model());
                 outputSnapshot.put("promptVersion", promptVersion);
                 outputSnapshot.put("output", parsed);
                 traceService.recordCurrentSnapshot(TraceSnapshotType.MODEL_OUTPUT,
-                        "MODEL_OPERATION", request.operation(), outputSnapshot);
+                        "MODEL_OPERATION", request.metadata().get("operation").toString(), outputSnapshot);
             }
-            record(sessionId, workflowId, inputEventIds, persistedRunType, provider.name(), response.model(),
-                    promptVersion, requestJson, responseJson(response.rawText()), response.inputTokens(),
-                    response.outputTokens(), startedAt, "SUCCEEDED", null);
-            if (traceService != null) traceService.finishSpanSuccess(span, null, Map.of(
-                    "provider", provider.name(), "model", response.model(), "promptVersion", promptVersion));
+            record(sessionId, workflowId, inputEventIds, persistedRunType, provider.providerName(),
+                    response.model(), promptVersion, requestJson, responseJson(response.content()), response.usage(),
+                    startedAt, "SUCCEEDED", null);
+            if (traceService != null) {
+                traceService.finishSpanSuccess(span, null, Map.of(
+                        "provider", provider.providerName(),
+                        "model", response.model(),
+                        "promptVersion", promptVersion
+                ));
+            }
             return parsed;
-        } catch (BusinessException ex) {
-            record(sessionId, workflowId, inputEventIds, persistedRunType, provider.name(), model(response),
-                    promptVersion, requestJson, responseJson(rawText(response)), inputTokens(response),
-                    outputTokens(response), startedAt, "FAILED_GENERATION", ex.getResultCode().code());
-            if (traceService != null) traceService.finishSpanFailure(span, ex.getResultCode().code(), ex, Map.of("provider", provider.name()));
-            throw ex;
         } catch (JsonProcessingException ex) {
-            record(sessionId, workflowId, inputEventIds, persistedRunType, provider.name(), model(response),
-                    promptVersion, requestJson, responseJson(rawText(response)), inputTokens(response),
-                    outputTokens(response), startedAt, "FAILED_GENERATION", "INVALID_PROVIDER_JSON");
-            if (traceService != null) traceService.finishSpanFailure(span, "INVALID_PROVIDER_JSON", ex, Map.of("provider", provider.name()));
-            throw new IllegalStateException("INVALID_PROVIDER_JSON");
-        } catch (RuntimeException ex) {
-            record(sessionId, workflowId, inputEventIds, persistedRunType, provider.name(), model(response),
-                    promptVersion, requestJson, responseJson(rawText(response)), inputTokens(response),
-                    outputTokens(response), startedAt, "FAILED_GENERATION", safeErrorCode(ex));
-            if (traceService != null) traceService.finishSpanFailure(span, safeErrorCode(ex), ex, Map.of("provider", provider.name()));
+            ModelCallException mapped = new ModelCallException(
+                    "MODEL_INVALID_RESPONSE", "Model response was not valid JSON", ex
+            );
+            recordFailure(sessionId, workflowId, inputEventIds, persistedRunType, promptVersion,
+                    requestJson, provider, response, startedAt, span, mapped);
+            throw mapped;
+        } catch (ModelCallException ex) {
+            recordFailure(sessionId, workflowId, inputEventIds, persistedRunType, promptVersion,
+                    requestJson, provider, response, startedAt, span, ex);
             throw ex;
+        } catch (RuntimeException ex) {
+            ModelCallException mapped = new ModelCallException(
+                    "MODEL_PROVIDER_FAILED", "Model provider failed", ex
+            );
+            recordFailure(sessionId, workflowId, inputEventIds, persistedRunType, promptVersion,
+                    requestJson, provider, response, startedAt, span, mapped);
+            throw mapped;
+        }
+    }
+
+    private void recordFailure(
+            Long sessionId,
+            Long workflowId,
+            List<Long> inputEventIds,
+            String runType,
+            String promptVersion,
+            String requestJson,
+            ChatModelProvider provider,
+            ModelResponse response,
+            Instant startedAt,
+            TraceService.SpanHandle span,
+            ModelCallException error
+    ) {
+        record(sessionId, workflowId, inputEventIds, runType, provider.providerName(), model(response),
+                promptVersion, requestJson, responseJson(content(response)), usage(response), startedAt,
+                "FAILED_GENERATION", error.code());
+        if (traceService != null) {
+            traceService.finishSpanFailure(span, error.code(), error,
+                    Map.of("provider", provider.providerName()));
         }
     }
 
     private void record(
-            Long sessionId, Long workflowId, List<Long> inputEventIds, String runType, String provider,
-            String model, String promptVersion, String requestJson, String responseJson,
-            Integer inputTokens, Integer outputTokens, Instant startedAt, String status, String errorCode
+            Long sessionId,
+            Long workflowId,
+            List<Long> inputEventIds,
+            String runType,
+            String provider,
+            String model,
+            String promptVersion,
+            String requestJson,
+            String responseJson,
+            ModelUsage usage,
+            Instant startedAt,
+            String status,
+            String errorCode
     ) {
         agentRunService.recordModelCall(
                 sessionId, workflowId, runType, provider, model, promptVersion, inputEventIds,
-                requestJson, responseJson, inputTokens, outputTokens,
+                requestJson, responseJson, inputTokens(usage), outputTokens(usage),
                 Duration.between(startedAt, Instant.now()).toMillis(), status, errorCode
         );
     }
 
-    private void validateResponse(String operation, JsonNode parsed) {
+    private void validateResponse(Object operation, JsonNode parsed) {
         if (parsed == null || !parsed.isObject()) {
-            throw new IllegalStateException("INVALID_PROVIDER_JSON");
+            throw new ModelCallException("MODEL_INVALID_RESPONSE", "Model response must be a JSON object");
         }
         String requiredField = "INTENT_CLASSIFICATION".equals(operation) ? "intent" : "answer";
         String requiredValue = nullableText(parsed, requiredField);
         if (requiredValue == null || requiredValue.isBlank()) {
-            throw new IllegalStateException("INVALID_PROVIDER_JSON");
+            throw new ModelCallException("MODEL_INVALID_RESPONSE", "Model response is missing a required field");
         }
     }
 
     private String requiredText(JsonNode node, String field) {
         String value = nullableText(node, field);
         if (value == null || value.isBlank()) {
-            throw new IllegalStateException("INVALID_PROVIDER_JSON");
+            throw new ModelCallException("MODEL_INVALID_RESPONSE", "Model response is missing a required field");
         }
         return value;
     }
@@ -266,32 +305,32 @@ public class AgentModelService {
         try {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException ex) {
-            throw new IllegalStateException("AGENT_PROVIDER_REQUEST_SERIALIZATION_FAILED");
+            throw new ModelCallException("MODEL_REQUEST_SERIALIZATION_FAILED",
+                    "Model request serialization failed", ex);
         }
     }
 
-    private String responseJson(String rawText) {
-        return toJson(Map.of("rawText", rawText == null ? "" : rawText));
+    private String responseJson(String content) {
+        return toJson(Map.of("content", content == null ? "" : content));
     }
 
-    private static String rawText(AgentProviderResponse response) {
-        return response == null ? null : response.rawText();
+    private static String content(ModelResponse response) {
+        return response == null ? null : response.content();
     }
 
-    private static String model(AgentProviderResponse response) {
+    private static String model(ModelResponse response) {
         return response == null ? null : response.model();
     }
 
-    private static Integer inputTokens(AgentProviderResponse response) {
-        return response == null ? null : response.inputTokens();
+    private static ModelUsage usage(ModelResponse response) {
+        return response == null ? null : response.usage();
     }
 
-    private static Integer outputTokens(AgentProviderResponse response) {
-        return response == null ? null : response.outputTokens();
+    private static Integer inputTokens(ModelUsage usage) {
+        return usage == null ? null : usage.inputTokens();
     }
 
-    private static String safeErrorCode(RuntimeException ex) {
-        String message = ex.getMessage();
-        return message != null && message.matches("[A-Z0-9_]+") ? message : "AGENT_PROVIDER_FAILED";
+    private static Integer outputTokens(ModelUsage usage) {
+        return usage == null ? null : usage.outputTokens();
     }
 }

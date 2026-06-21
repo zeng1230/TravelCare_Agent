@@ -8,7 +8,6 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import travelcare_agent.adapter.order.MockOrderAdapter;
-import travelcare_agent.agent.provider.DeepSeekAgentProvider;
 import travelcare_agent.conversation.service.SessionService;
 import travelcare_agent.trace.TraceQueryService;
 
@@ -33,7 +32,6 @@ class DiagnosticDryRunIntegrationTest {
     @Autowired private TraceQueryService traceQueryService;
     @Autowired private JdbcTemplate jdbcTemplate;
     @SpyBean private MockOrderAdapter orderAdapter;
-    @SpyBean private DeepSeekAgentProvider deepSeekAgentProvider;
     @MockBean private RabbitTemplate rabbitTemplate;
 
     @Test
@@ -43,7 +41,7 @@ class DiagnosticDryRunIntegrationTest {
                 sessionId, "Can I refund order ORD-1001?", "stage7b-original-" + System.nanoTime(), false);
         Map<String, Long> before = counts();
         var originalSnapshots = traceQueryService.get(original.traceId()).snapshots();
-        reset(orderAdapter, deepSeekAgentProvider, rabbitTemplate);
+        reset(orderAdapter, rabbitTemplate);
 
         DryRunResult result = dryRunService.run(original.traceId(), new DryRunRequest("integration-test", "mock", true));
         DryRunResult repeated = dryRunService.run(original.traceId(), new DryRunRequest("integration-test-repeat", "mock", true));
@@ -58,7 +56,7 @@ class DiagnosticDryRunIntegrationTest {
         assertThat(finalOutput(result.dryRunTraceId())).isEqualTo(finalOutput(repeated.dryRunTraceId()));
         assertThat(traceQueryService.get(result.dryRunTraceId()).run().getDryRun()).isTrue();
         assertThat(counts()).isEqualTo(before);
-        verifyNoInteractions(orderAdapter, deepSeekAgentProvider, rabbitTemplate);
+        verifyNoInteractions(orderAdapter, rabbitTemplate);
     }
 
     private String finalOutput(String traceId) {

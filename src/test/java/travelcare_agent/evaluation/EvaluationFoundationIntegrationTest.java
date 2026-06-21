@@ -8,7 +8,6 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 import travelcare_agent.adapter.order.MockOrderAdapter;
-import travelcare_agent.agent.provider.DeepSeekAgentProvider;
 import travelcare_agent.dryrun.DryRunReadinessChecker;
 import travelcare_agent.evaluation.entity.EvaluationCase;
 import travelcare_agent.evaluation.entity.EvaluationDataset;
@@ -53,7 +52,6 @@ class EvaluationFoundationIntegrationTest {
     @Autowired private DryRunReadinessChecker readinessChecker;
     @Autowired private JdbcTemplate jdbc;
     @SpyBean private MockOrderAdapter orderAdapter;
-    @SpyBean private DeepSeekAgentProvider deepSeek;
     @MockBean private RabbitTemplate rabbit;
 
     @Test
@@ -89,7 +87,7 @@ class EvaluationFoundationIntegrationTest {
                 .containsExactlyInAnyOrderElementsOf(sourceTraceIds.values());
 
         datasets.activate(dataset.getId());
-        reset(orderAdapter, deepSeek, rabbit);
+        reset(orderAdapter, rabbit);
         EvaluationRun run = runner.start(dataset.getId(), "mock", "stage8-default");
         var persistedResults = resultRepo.findResultsByRunId(run.getId());
 
@@ -106,7 +104,7 @@ class EvaluationFoundationIntegrationTest {
                         && result.getDryRunTraceId() != null
                         && result.getDiffId() != null);
         assertThat(counts()).isEqualTo(businessCountsBefore);
-        verifyNoInteractions(orderAdapter, deepSeek, rabbit);
+        verifyNoInteractions(orderAdapter, rabbit);
 
         String report = runner.report(run.getId());
         assertThat(report).contains(
@@ -168,7 +166,7 @@ class EvaluationFoundationIntegrationTest {
         assertThat(unsafe.getRegressionStatus()).isEqualTo("REGRESSION");
         assertThat(unsafe.getRegressionCount()).isGreaterThanOrEqualTo(1);
         assertThat(counts()).isEqualTo(businessCountsBefore);
-        verifyNoInteractions(orderAdapter, deepSeek, rabbit);
+        verifyNoInteractions(orderAdapter, rabbit);
     }
 
     private Long createSourceTrace(RefundScenario scenario) {

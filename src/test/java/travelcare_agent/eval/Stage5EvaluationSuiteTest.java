@@ -5,10 +5,11 @@ import org.junit.jupiter.api.Test;
 import travelcare_agent.agent.AgentModelService;
 import travelcare_agent.agent.MockIntentClassifier;
 import travelcare_agent.agent.prompt.PromptTemplateService;
-import travelcare_agent.agent.provider.AgentProvider;
-import travelcare_agent.agent.provider.AgentProviderRequest;
-import travelcare_agent.agent.provider.AgentProviderResponse;
-import travelcare_agent.agent.provider.MockAgentProvider;
+import travelcare_agent.agent.provider.ChatModelProvider;
+import travelcare_agent.agent.provider.MockChatModelProvider;
+import travelcare_agent.agent.provider.ModelRequest;
+import travelcare_agent.agent.provider.ModelResponse;
+import travelcare_agent.agent.provider.ModelUsage;
 import travelcare_agent.agentrun.entity.AgentRun;
 import travelcare_agent.agentrun.repository.AgentRunRepository;
 import travelcare_agent.agentrun.service.AgentRunService;
@@ -45,7 +46,7 @@ class Stage5EvaluationSuiteTest {
         RefundEligibilityDecision eligible = policy.evaluate(order("ORD-5001", true, LocalDateTime.now(CLOCK).plusHours(48)), 1001L);
         RefundEligibilityDecision ineligible = policy.evaluate(order("ORD-5002", false, LocalDateTime.now(CLOCK).plusHours(48)), 1001L);
 
-        MockAgentProvider mockProvider = new MockAgentProvider();
+        MockChatModelProvider mockProvider = new MockChatModelProvider();
         InMemoryAgentRunRepository repository = new InMemoryAgentRunRepository();
         AgentModelService mockModelService = new AgentModelService(
                 mockProvider,
@@ -60,10 +61,11 @@ class Stage5EvaluationSuiteTest {
                 503L, null, List.of(703L), "I want a refund"
         );
 
-        AgentProvider invalidProvider = new AgentProvider() {
-            public String name() { return "deepseek"; }
-            public AgentProviderResponse invoke(AgentProviderRequest request) {
-                return new AgentProviderResponse("not-json", "deepseek-chat", 1, 1);
+        ChatModelProvider invalidProvider = new ChatModelProvider() {
+            public String providerName() { return "deepseek"; }
+            public ModelResponse call(ModelRequest request) {
+                return new ModelResponse("not-json", "deepseek-chat", "deepseek",
+                        new ModelUsage(1, 1, 2), 1, "stop", null);
             }
         };
         AgentModelService modelService = new AgentModelService(
