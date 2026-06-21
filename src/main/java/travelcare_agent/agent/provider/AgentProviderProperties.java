@@ -7,25 +7,67 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "travelcare.agent")
 public class AgentProviderProperties {
 
-    private String provider = "mock";
-    private DeepSeek deepseek = new DeepSeek("https://api.deepseek.com", "", "deepseek-chat", 5000);
+    private AgentProviderType provider = AgentProviderType.MOCK;
+    private String model = "mock-stage10a";
+    private String promptVersion = "stage10a-default";
+    private int timeoutMs = 5000;
+    private String apiKey = "";
+    private String baseUrl = "https://api.deepseek.com";
+    private Double temperature = 0.0;
 
-    public String getProvider() {
+    public AgentProviderType getProvider() {
         return provider;
     }
 
-    public void setProvider(String provider) {
+    public void setProvider(AgentProviderType provider) {
         this.provider = provider;
     }
 
-    public DeepSeek getDeepseek() {
-        return deepseek;
+    public String getModel() {
+        return model;
     }
 
-    public void setDeepseek(DeepSeek deepseek) {
-        this.deepseek = deepseek;
+    public void setModel(String model) {
+        this.model = model;
     }
 
-    public record DeepSeek(String baseUrl, String apiKey, String model, int timeoutMs) {
+    public String getPromptVersion() {
+        return promptVersion;
+    }
+
+    public void setPromptVersion(String promptVersion) {
+        this.promptVersion = promptVersion;
+    }
+
+    public int getTimeoutMs() {
+        return timeoutMs;
+    }
+
+    public void setTimeoutMs(int timeoutMs) {
+        this.timeoutMs = timeoutMs;
+    }
+
+    public String getApiKey() {
+        return apiKey;
+    }
+
+    public void setApiKey(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
+    public String getBaseUrl() {
+        return baseUrl;
+    }
+
+    public void setBaseUrl(String baseUrl) {
+        this.baseUrl = baseUrl;
+    }
+
+    public Double getTemperature() {
+        return temperature;
+    }
+
+    public void setTemperature(Double temperature) {
+        this.temperature = temperature;
     }
 }

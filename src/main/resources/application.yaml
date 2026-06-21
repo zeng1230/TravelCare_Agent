@@ -17,11 +17,12 @@ spring:
 travelcare:
   agent:
     provider: ${TRAVELCARE_AGENT_PROVIDER:mock}
-    deepseek:
-      base-url: ${TRAVELCARE_AGENT_DEEPSEEK_BASE_URL:https://api.deepseek.com}
-      api-key: ${TRAVELCARE_AGENT_DEEPSEEK_API_KEY:}
-      model: ${TRAVELCARE_AGENT_DEEPSEEK_MODEL:deepseek-chat}
-      timeout-ms: ${TRAVELCARE_AGENT_DEEPSEEK_TIMEOUT_MS:5000}
+    model: ${TRAVELCARE_AGENT_MODEL:mock-stage10a}
+    prompt-version: ${TRAVELCARE_AGENT_PROMPT_VERSION:stage10a-default}
+    timeout-ms: ${TRAVELCARE_AGENT_TIMEOUT_MS:5000}
+    api-key: ${TRAVELCARE_AGENT_API_KEY:}
+    base-url: ${TRAVELCARE_AGENT_BASE_URL:https://api.deepseek.com}
+    temperature: ${TRAVELCARE_AGENT_TEMPERATURE:0.0}
   jwt:
     issuer: ${TRAVELCARE_JWT_ISSUER:travelcare-agent}
     secret: ${TRAVELCARE_JWT_SECRET:change-me-in-local-env}

@@ -3,10 +3,12 @@ package travelcare_agent.agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import travelcare_agent.agent.prompt.PromptTemplateService;
-import travelcare_agent.agent.provider.AgentProvider;
-import travelcare_agent.agent.provider.AgentProviderRequest;
-import travelcare_agent.agent.provider.AgentProviderResponse;
-import travelcare_agent.agent.provider.MockAgentProvider;
+import travelcare_agent.agent.provider.ChatModelProvider;
+import travelcare_agent.agent.provider.MockChatModelProvider;
+import travelcare_agent.agent.provider.ModelCallException;
+import travelcare_agent.agent.provider.ModelRequest;
+import travelcare_agent.agent.provider.ModelResponse;
+import travelcare_agent.agent.provider.ModelUsage;
 import travelcare_agent.agentrun.entity.AgentRun;
 import travelcare_agent.agentrun.repository.AgentRunRepository;
 import travelcare_agent.agentrun.service.AgentRunService;
@@ -24,7 +26,7 @@ class AgentModelServiceTest {
     @Test
     void recordsPromptVersionForEachSuccessfulModelCall() {
         InMemoryAgentRunRepository repository = new InMemoryAgentRunRepository();
-        AgentModelService service = service(new MockAgentProvider(), repository);
+        AgentModelService service = service(new MockChatModelProvider(), repository);
 
         MockIntentClassifier.IntentResult intent = service.classifyIntentAndExtractSlots(
                 100L, null, List.of(11L), "Can I refund order ORD-10?"
@@ -49,15 +51,16 @@ class AgentModelServiceTest {
     @Test
     void invalidJsonFallsBackWithoutReturningRawText() {
         InMemoryAgentRunRepository repository = new InMemoryAgentRunRepository();
-        AgentProvider invalidProvider = new AgentProvider() {
+        ChatModelProvider invalidProvider = new ChatModelProvider() {
             @Override
-            public String name() {
+            public String providerName() {
                 return "deepseek";
             }
 
             @Override
-            public AgentProviderResponse invoke(AgentProviderRequest request) {
-                return new AgentProviderResponse("raw text that must not reach the customer", "deepseek-chat", 3, 4);
+            public ModelResponse call(ModelRequest request) {
+                return new ModelResponse("raw text that must not reach the customer", "deepseek-chat",
+                        "deepseek", new ModelUsage(3, 4, 7), 1, "stop", null);
             }
         };
         AgentModelService service = service(invalidProvider, repository);
@@ -72,15 +75,37 @@ class AgentModelServiceTest {
                 .extracting(AgentRun::getRunType)
                 .containsExactly("RESPONSE_GENERATION", "FALLBACK");
         assertThat(repository.findAll().get(0).getStatus()).isEqualTo("FAILED_GENERATION");
-        assertThat(repository.findAll().get(0).getErrorCode()).isEqualTo("INVALID_PROVIDER_JSON");
+        assertThat(repository.findAll().get(0).getErrorCode()).isEqualTo("MODEL_INVALID_RESPONSE");
         assertThat(repository.findAll().get(1).getStatus()).isEqualTo("SUCCEEDED");
         assertThat(repository.findAll().get(1).getProvider()).isEqualTo("mock");
     }
 
-    private static AgentModelService service(AgentProvider provider, AgentRunRepository repository) {
+    @Test
+    void providerExceptionFallsBackToDeterministicIntentClassification() {
+        InMemoryAgentRunRepository repository = new InMemoryAgentRunRepository();
+        ChatModelProvider failingProvider = new ChatModelProvider() {
+            public ModelResponse call(ModelRequest request) {
+                throw new ModelCallException("MODEL_TIMEOUT", "timed out");
+            }
+            public String providerName() { return "deepseek"; }
+        };
+        AgentModelService service = service(failingProvider, repository);
+
+        MockIntentClassifier.IntentResult result = service.classifyIntentAndExtractSlots(
+                100L, null, List.of(11L), "refund ORD-10"
+        );
+
+        assertThat(result.intent()).isEqualTo("REFUND_INQUIRY");
+        assertThat(result.orderNo()).isEqualTo("ORD-10");
+        assertThat(repository.findAll()).extracting(AgentRun::getRunType)
+                .containsExactly("INTENT_CLASSIFICATION", "FALLBACK");
+        assertThat(repository.findAll().get(0).getErrorCode()).isEqualTo("MODEL_TIMEOUT");
+    }
+
+    private static AgentModelService service(ChatModelProvider provider, AgentRunRepository repository) {
         return new AgentModelService(
                 provider,
-                new MockAgentProvider(),
+                new MockChatModelProvider(),
                 new PromptTemplateService(),
                 new AgentRunService(repository),
                 new ObjectMapper()

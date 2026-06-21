@@ -238,25 +238,34 @@ docker compose -f travelcare_dev/docker-compose.yaml up -d
 
 默认数据库地址为 `jdbc:mysql://localhost:3307/travelcare_agent`。默认账号密码仅用于本地开发，不应直接用于共享或生产环境。
 
-### Provider 配置
+### Stage 10A Provider 配置
 
-默认配置不会访问真实 LLM：
+Stage 10A 将模型调用入口统一为 `ChatModelProvider`。默认配置使用确定性的
+`MockChatModelProvider`，不会创建或访问真实 LLM：
 
 ```yaml
 travelcare:
   agent:
     provider: mock
+    model: mock-stage10a
+    prompt-version: stage10a-default
+    timeout-ms: 5000
 ```
 
 手工验证 DeepSeek 时必须显式配置 Provider 和 API Key：
 
 ```powershell
 $env:TRAVELCARE_AGENT_PROVIDER = "deepseek"
-$env:TRAVELCARE_AGENT_DEEPSEEK_API_KEY = "<your-api-key>"
+$env:TRAVELCARE_AGENT_MODEL = "deepseek-chat"
+$env:TRAVELCARE_AGENT_API_KEY = "<your-api-key>"
+$env:TRAVELCARE_AGENT_BASE_URL = "https://api.deepseek.com"
+$env:TRAVELCARE_AGENT_TIMEOUT_MS = "8000"
 .\mvnw.cmd spring-boot:run
 ```
 
-不要把 API Key 写入仓库、测试、日志或评测数据。全量测试通过 Maven Surefire 强制使用 Mock Provider。
+不要把 API Key 写入仓库、测试、日志或评测数据。全量测试通过 Maven Surefire
+强制使用 Mock Provider。详细设计、fallback 行为和限制见
+[`docs/stage10/10A-provider-abstraction.md`](docs/stage10/10A-provider-abstraction.md)。
 
 ## 测试
 
@@ -264,11 +273,10 @@ $env:TRAVELCARE_AGENT_DEEPSEEK_API_KEY = "<your-api-key>"
 .\mvnw.cmd test
 ```
 
-最近一次本地全量验证（2026-06-20）：
+最近一次本地全量验证（2026-06-21）：
 
 ```text
-Test suites: 62
-Tests run: 165
+Tests run: 173
 Failures: 0
 Errors: 0
 Skipped: 0

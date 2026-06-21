@@ -7,8 +7,6 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.boot.test.mock.mockito.SpyBean;
-import travelcare_agent.agent.provider.DeepSeekAgentProvider;
 import travelcare_agent.evaluation.entity.EvaluationDataset;
 import travelcare_agent.evaluation.repository.EvaluationCaseResultRepository;
 import travelcare_agent.trace.TraceService;
@@ -36,7 +34,6 @@ class Stage9EvaluationAppliedIntegrationTest {
     @Autowired private TraceRunRepository traceRuns;
     @Autowired private TraceService traces;
     @Autowired private ObjectMapper json;
-    @SpyBean private DeepSeekAgentProvider deepSeek;
     @MockBean private RabbitTemplate rabbit;
 
     @Test
@@ -51,7 +48,7 @@ class Stage9EvaluationAppliedIntegrationTest {
         }
         datasets.activate(dataset.getId());
 
-        reset(deepSeek, rabbit);
+        reset(rabbit);
         var run = runner.start(dataset.getId(), "mock", "stage8-default", false);
         var caseResults = results.findResultsByRunId(run.getId());
 
@@ -76,7 +73,7 @@ class Stage9EvaluationAppliedIntegrationTest {
             assertThat(report).containsPattern("scorer=" + scorer + ".*applied=true");
         }
         assertThat(Files.exists(Path.of("target", "evaluation", "runs", run.getId() + "_report.md"))).isTrue();
-        verifyNoInteractions(deepSeek, rabbit);
+        verifyNoInteractions(rabbit);
     }
 
     private void assertApplied(List<travelcare_agent.evaluation.entity.EvaluationCaseResult> caseResults,
