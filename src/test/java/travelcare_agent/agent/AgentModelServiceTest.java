@@ -22,8 +22,81 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AgentModelServiceTest {
+
+    @Test
+    void unsafeStructuredOutputIsBlockedWithoutCallingFallbackProvider() {
+        InMemoryAgentRunRepository repository = new InMemoryAgentRunRepository();
+        java.util.concurrent.atomic.AtomicInteger primaryCalls = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger fallbackCalls = new java.util.concurrent.atomic.AtomicInteger();
+        ChatModelProvider unsafeProvider = new ChatModelProvider() {
+            public ModelResponse call(ModelRequest request) {
+                primaryCalls.incrementAndGet();
+                return new ModelResponse("""
+                        {"intent":"REFUND_INQUIRY","confidence":0.99,"slots":{"orderNo":"ORD-10"},
+                         "answerDraft":"我已经帮你退款了","citations":[],"riskFlags":[]}
+                        """, "deepseek-chat", "deepseek", new ModelUsage(1, 1, 2), 1, "stop", "raw-secret");
+            }
+            public String providerName() { return "deepseek"; }
+        };
+        MockChatModelProvider fallback = new MockChatModelProvider() {
+            @Override public ModelResponse call(ModelRequest request) {
+                fallbackCalls.incrementAndGet();
+                return super.call(request);
+            }
+        };
+        AgentModelService service = service(unsafeProvider, fallback, repository);
+
+        String answer = service.generateCustomerAnswer(
+                100L, 200L, List.of(11L), List.of(), "verified deterministic answer");
+
+        assertThat(answer).doesNotContain("已经帮你退款", "raw-secret");
+        assertThat(primaryCalls).hasValue(1);
+        assertThat(fallbackCalls).hasValue(0);
+        assertThat(repository.findAll()).singleElement().satisfies(run -> {
+            assertThat(run.getProviderStatus()).isEqualTo("SUCCESS");
+            assertThat(run.getSafetyDecision()).isEqualTo("BLOCK");
+            assertThat(run.getSafetyReasonCode()).isEqualTo("UNSAFE_COMMITMENT");
+            assertThat(run.getRiskFlagsJson()).contains("UNSAFE_COMMITMENT", "CRITICAL");
+            assertThat(run.getRiskFlagsJson()).doesNotContain("已经帮你退款", "raw-secret");
+        });
+    }
+
+    @Test
+    void modelTraceSnapshotsContainOnlyHashesAndSafetyCodes() throws Exception {
+        InMemoryAgentRunRepository repository = new InMemoryAgentRunRepository();
+        travelcare_agent.trace.TraceService trace = org.mockito.Mockito.mock(travelcare_agent.trace.TraceService.class);
+        org.mockito.Mockito.when(trace.startSpan(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyMap()))
+                .thenReturn(travelcare_agent.trace.TraceService.SpanHandle.unavailable());
+        ChatModelProvider unsafe = new ChatModelProvider() {
+            public ModelResponse call(ModelRequest request) {
+                return new ModelResponse("""
+                        {"intent":"REFUND_INQUIRY","confidence":0.99,"slots":{},
+                         "answerDraft":"退款已到账 raw-provider-secret","citations":[],"riskFlags":[]}
+                        """, "deepseek-chat", "deepseek", new ModelUsage(1, 1, 2), 1, "stop", "http-secret");
+            }
+            public String providerName() { return "deepseek"; }
+        };
+        AgentProviderProperties properties = new AgentProviderProperties();
+        properties.setProvider(AgentProviderType.DEEPSEEK);
+        AgentModelService service = new AgentModelService(unsafe, new MockChatModelProvider(), properties,
+                new PromptTemplateService(), new AgentRunService(repository), new ObjectMapper(), trace);
+
+        service.generateCustomerAnswer(1L, 2L, List.of(3L), List.of(), "private deterministic answer");
+
+        org.mockito.ArgumentCaptor<Object> payloads = org.mockito.ArgumentCaptor.forClass(Object.class);
+        org.mockito.Mockito.verify(trace, org.mockito.Mockito.atLeast(3)).recordCurrentSnapshot(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.nullable(String.class), payloads.capture());
+        String persisted = new ObjectMapper().writeValueAsString(payloads.getAllValues());
+        assertThat(persisted).contains("inputHash", "outputHash", "UNSAFE_COMMITMENT");
+        assertThat(persisted).doesNotContain(
+                "private deterministic answer", "退款已到账", "raw-provider-secret", "http-secret", "answerDraft");
+    }
 
     @Test
     void recordsPromptVersionForEachSuccessfulModelCall() {

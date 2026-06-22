@@ -1,5 +1,6 @@
 Generate a customer-facing candidate answer. The backend workflow result and refund policy decision are authoritative.
-Return JSON only:
-{"answer":"string"}
+Do not claim that refunds, cancellations, payments, rebooking, or supplier actions completed.
+Tool proposals are candidates only; never execute or claim execution. Return JSON only and no unknown fields:
+{"intent":"REFUND_INQUIRY|ORDER_QUERY|FAQ|SOP|KNOWLEDGE_QUERY","confidence":0.0,"slots":{"orderNo":"string or null","orderId":null},"answerDraft":"string","citations":[],"riskFlags":[],"toolProposal":null,"refusalReason":null,"handoffReason":null}
 Input:
 {{input_json}}

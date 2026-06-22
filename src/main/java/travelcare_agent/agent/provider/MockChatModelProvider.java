@@ -21,9 +21,21 @@ public class MockChatModelProvider implements ChatModelProvider {
                     stringValue(request.metadata().get("message"))
             );
             output.put("intent", intent.intent());
-            output.put("orderNo", intent.orderNo());
+            output.put("confidence", 1.0);
+            Map<String, Object> slots = new LinkedHashMap<>();
+            slots.put("orderNo", intent.orderNo());
+            slots.put("orderId", null);
+            output.put("slots", slots);
+            output.put("citations", java.util.List.of());
+            output.put("riskFlags", java.util.List.of());
         } else if ("RESPONSE_GENERATION".equals(operation)) {
-            output.put("answer", stringValue(request.metadata().get("deterministicAnswer")));
+            output.put("intent", stringValue(request.metadata().get("intent")));
+            output.put("confidence", 1.0);
+            output.put("slots", Map.of());
+            output.put("answerDraft", stringValue(request.metadata().get("deterministicAnswer")));
+            Object citations = request.metadata().get("citations");
+            output.put("citations", citations == null ? java.util.List.of() : citations);
+            output.put("riskFlags", java.util.List.of());
         } else {
             throw new ModelCallException("MODEL_UNSUPPORTED_OPERATION", "Unsupported mock model operation");
         }

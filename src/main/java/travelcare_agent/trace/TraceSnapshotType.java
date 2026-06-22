@@ -6,6 +6,7 @@ public enum TraceSnapshotType {
     RETRIEVAL_SUMMARY,
     MODEL_INPUT,
     MODEL_OUTPUT,
+    MODEL_SAFETY_DECISION,
     TOOL_REQUEST,
     TOOL_RESULT,
     POLICY_INPUT,

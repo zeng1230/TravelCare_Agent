@@ -1,4 +1,4 @@
-Classify the customer message. Return JSON only:
-{"intent":"REFUND_INQUIRY|ORDER_QUERY","orderNo":"string or null"}
+Classify the customer message and extract controlled slots. Return JSON only and no unknown fields:
+{"intent":"REFUND_INQUIRY|ORDER_QUERY|FAQ|SOP|KNOWLEDGE_QUERY","confidence":0.0,"slots":{"orderNo":"string or null","orderId":null},"answerDraft":null,"citations":[],"riskFlags":[],"toolProposal":null,"refusalReason":null,"handoffReason":null}
 Input:
 {{input_json}}

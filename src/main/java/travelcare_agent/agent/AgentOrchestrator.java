@@ -17,6 +17,13 @@ import travelcare_agent.retrieval.service.RetrievalSnippet;
 import travelcare_agent.memory.entity.AgentMemory;
 import travelcare_agent.trace.TraceService;
 import travelcare_agent.trace.TraceSnapshotType;
+import travelcare_agent.agent.safety.ModelSafetyContext;
+import travelcare_agent.agent.safety.ModelSafetyDecision;
+import travelcare_agent.agent.safety.ModelSafetyDecisionType;
+import travelcare_agent.agent.safety.SafeModelResult;
+import travelcare_agent.answerability.CitationPolicy;
+import java.time.LocalDateTime;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 
@@ -97,11 +104,23 @@ public class AgentOrchestrator {
         List<Long> retrievalChunkIds = agentContext.policySnippets().stream()
                 .map(RetrievalSnippet::chunkId)
                 .toList();
-        MockIntentClassifier.IntentResult intent = agentModelService == null
-                ? intentClassifier.classify(request.message())
-                : agentModelService.classifyIntentAndExtractSlots(
-                        request.sessionId(), null, contextEventIds, retrievalChunkIds, request.message()
-                );
+        SafeModelResult<MockIntentClassifier.IntentResult> intentResult;
+        if (agentModelService == null) {
+            MockIntentClassifier.IntentResult deterministicIntent = intentClassifier.classify(request.message());
+            intentResult = new SafeModelResult<>(deterministicIntent,
+                    new ModelSafetyDecision(ModelSafetyDecisionType.ALLOW, "DETERMINISTIC_INTENT", List.of(), null),
+                    false);
+        } else {
+            intentResult = agentModelService.classifyIntentAndExtractSlotsSafely(
+                    request.sessionId(), null, contextEventIds, retrievalChunkIds, request.message());
+        }
+        MockIntentClassifier.IntentResult intent = intentResult.value();
+        if (intentResult.decision().type() != ModelSafetyDecisionType.ALLOW) {
+            return replyWithoutWorkflow(intent, agentContext, intentResult.decision().safeAnswer(), true);
+        }
+        if (isKnowledgeExplanationIntent(intent.intent())) {
+            return handleKnowledgeIntent(request, agentContext, contextEventIds, retrievalChunkIds, intent);
+        }
         WorkflowEngine.WorkflowResult workflowResult;
         try {
             workflowResult = workflowEngine.start(
@@ -163,12 +182,24 @@ public class AgentOrchestrator {
                 fallbackUsed = true;
             } else {
                 String deterministicAnswer = responseGenerator.generate(intent, workflowResult, agentContext);
-                answer = agentModelService == null
-                    ? deterministicAnswer
-                    : agentModelService.generateCustomerAnswer(
+                if (agentModelService == null) {
+                    answer = deterministicAnswer;
+                } else {
+                    String authoritativeDecision = refundCaseRepository
+                            .findByWorkflowId(workflowResult.workflow().getId())
+                            .map(refundCase -> refundCase.getStatus().name())
+                            .orElse(null);
+                    ModelSafetyContext safetyContext = new ModelSafetyContext(
+                            "RESPONSE_GENERATION", Set.of(intent.intent()), false, false,
+                            CitationPolicy.FORBIDDEN, List.of(), agentContext.policySnippets(), true,
+                            deterministicAnswer, authoritativeDecision, LocalDateTime.now());
+                    SafeModelResult<String> safeAnswer = agentModelService.generateCustomerAnswerSafely(
                             request.sessionId(), workflowResult.workflow().getId(), contextEventIds,
-                            retrievalChunkIds, deterministicAnswer
-                    );
+                            retrievalChunkIds, deterministicAnswer, safetyContext);
+                    answer = safeAnswer.value();
+                    fallbackUsed = safeAnswer.providerFallbackUsed()
+                            || safeAnswer.decision().type() != ModelSafetyDecisionType.ALLOW;
+                }
             }
         } catch (RuntimeException ex) {
             throw new AgentStageException("FAILED_GENERATION", "RESPONSE_GENERATION_FAILED", agentContext, workflowResult.workflow().getId(), ex);
@@ -216,6 +247,61 @@ public class AgentOrchestrator {
         }
         String normalized = intent.trim().toUpperCase();
         return "FAQ".equals(normalized) || "SOP".equals(normalized) || "KNOWLEDGE_QUERY".equals(normalized);
+    }
+
+    private AgentReply handleKnowledgeIntent(
+            AgentRequest request,
+            AgentContext agentContext,
+            List<Long> contextEventIds,
+            List<Long> retrievalChunkIds,
+            MockIntentClassifier.IntentResult intent
+    ) {
+        AnswerabilityDecision answerability = agentContext.answerabilityDecision();
+        recordFinalAnswerability(answerability);
+        if (answerability == null
+                || answerability.requiredAction() == AnswerabilityRequiredAction.FALLBACK_REPLY) {
+            String fallback = answerability == null || answerability.fallbackMessage() == null
+                    ? travelcare_agent.answerability.AnswerabilityService.DEFAULT_FALLBACK_MESSAGE
+                    : answerability.fallbackMessage();
+            return replyWithoutWorkflow(intent, agentContext, fallback, true);
+        }
+        String deterministicAnswer = "I found verified policy guidance for this question.";
+        if (agentModelService == null) {
+            return replyWithoutWorkflow(intent, agentContext, deterministicAnswer, false);
+        }
+        ModelSafetyContext safetyContext = new ModelSafetyContext(
+                "KNOWLEDGE_ANSWER", Set.of(intent.intent()), false, true,
+                answerability.citationPolicy(), answerability.citations(), agentContext.policySnippets(), false,
+                deterministicAnswer, null, LocalDateTime.now());
+        SafeModelResult<String> result = agentModelService.generateCustomerAnswerSafely(
+                request.sessionId(), null, contextEventIds, retrievalChunkIds, deterministicAnswer, safetyContext);
+        return replyWithoutWorkflow(intent, agentContext, result.value(),
+                result.providerFallbackUsed() || result.decision().type() != ModelSafetyDecisionType.ALLOW);
+    }
+
+    private AgentReply replyWithoutWorkflow(
+            MockIntentClassifier.IntentResult intent,
+            AgentContext agentContext,
+            String answer,
+            boolean fallbackUsed
+    ) {
+        AnswerabilityDecision decision = agentContext.answerabilityDecision();
+        return new AgentReply(
+                intent == null ? null : intent.intent(), intent == null ? null : intent.orderNo(),
+                null, "NOT_STARTED", answer,
+                agentContext.policySnippets().stream().map(RetrievalSnippet::documentId).distinct().toList(),
+                agentContext.policySnippets().stream().map(RetrievalSnippet::chunkId).toList(),
+                agentContext.activeMemories().stream().map(AgentMemory::getId).toList(),
+                agentContext.recentEvents().stream().map(SessionEvent::getId).toList(),
+                decision == null ? null : decision.status().name(),
+                decision == null ? null : decision.reasonCode().name(),
+                decision == null ? null : decision.requiredAction().name(),
+                fallbackUsed,
+                decision != null && decision.businessDecisionLocked(),
+                decision != null && decision.ragMayExplainBusinessDecision(),
+                decision != null && decision.ragMayOverrideBusinessDecision(),
+                decision == null ? List.of() : decision.citations(),
+                decision == null ? List.of() : decision.rejectedCitationCandidates());
     }
 
     private AnswerabilityDecision lockBusinessDecision(AnswerabilityDecision decision,

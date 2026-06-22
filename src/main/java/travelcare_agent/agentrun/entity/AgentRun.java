@@ -28,6 +28,10 @@ public class AgentRun {
     private Integer outputTokens;
     private Integer totalTokens;
     private Boolean fallbackUsed;
+    private String providerStatus;
+    private String safetyDecision;
+    private String safetyReasonCode;
+    private String riskFlagsJson;
     private String inputEventIdsJson;
     private String retrievalChunkIdsJson;
     private String memoryIdsJson;
@@ -190,6 +194,38 @@ public class AgentRun {
 
     public void setFallbackUsed(Boolean fallbackUsed) {
         this.fallbackUsed = fallbackUsed;
+    }
+
+    public String getProviderStatus() {
+        return providerStatus;
+    }
+
+    public void setProviderStatus(String providerStatus) {
+        this.providerStatus = providerStatus;
+    }
+
+    public String getSafetyDecision() {
+        return safetyDecision;
+    }
+
+    public void setSafetyDecision(String safetyDecision) {
+        this.safetyDecision = safetyDecision;
+    }
+
+    public String getSafetyReasonCode() {
+        return safetyReasonCode;
+    }
+
+    public void setSafetyReasonCode(String safetyReasonCode) {
+        this.safetyReasonCode = safetyReasonCode;
+    }
+
+    public String getRiskFlagsJson() {
+        return riskFlagsJson;
+    }
+
+    public void setRiskFlagsJson(String riskFlagsJson) {
+        this.riskFlagsJson = riskFlagsJson;
     }
 
     public String getInputEventIdsJson() {

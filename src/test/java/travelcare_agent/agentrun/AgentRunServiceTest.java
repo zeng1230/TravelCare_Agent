@@ -16,6 +16,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AgentRunServiceTest {
 
     @Test
+    void recordsOnlyControlledModelSafetySummary() {
+        AgentRunService service = new AgentRunService(new InMemoryAgentRunRepository());
+        AgentRun run = service.startModelCall(new AgentRunService.ModelCallStart(
+                100L, 200L, "RESPONSE_GENERATION", "mock", "mock", "mock-stage10a",
+                "response-generator-v1", List.of(11L), List.of(21L), "a".repeat(64)));
+
+        service.completeModelCall(run, new AgentRunService.ModelCallCompletion(
+                null, null, "b".repeat(64), 1, 2, 3, false, 10L,
+                "SUCCESS", null, null, "SUCCESS", "BLOCK", "UNSAFE_COMMITMENT",
+                "[{\"code\":\"UNSAFE_COMMITMENT\",\"severity\":\"CRITICAL\"}]"));
+
+        assertThat(run.getProviderStatus()).isEqualTo("SUCCESS");
+        assertThat(run.getSafetyDecision()).isEqualTo("BLOCK");
+        assertThat(run.getSafetyReasonCode()).isEqualTo("UNSAFE_COMMITMENT");
+        assertThat(run.getRiskFlagsJson()).contains("UNSAFE_COMMITMENT", "CRITICAL");
+        assertThat(run.getRiskFlagsJson()).doesNotContain("answerDraft", "raw response", "Authorization");
+    }
+
+    @Test
     void recordsContextAndOutputHashesWithoutLongText() {
         AgentRunService service = new AgentRunService(new InMemoryAgentRunRepository());
 
