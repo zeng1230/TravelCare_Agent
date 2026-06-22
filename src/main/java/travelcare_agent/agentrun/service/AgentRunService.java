@@ -124,6 +124,10 @@ public class AgentRunService {
             run.setOutputTokens(completion.outputTokens());
             run.setTotalTokens(completion.totalTokens());
             run.setFallbackUsed(completion.fallbackUsed());
+            run.setProviderStatus(safeNullableCode(completion.providerStatus()));
+            run.setSafetyDecision(safeSafetyDecision(completion.safetyDecision()));
+            run.setSafetyReasonCode(safeNullableCode(completion.safetyReasonCode()));
+            run.setRiskFlagsJson(safeRiskFlagsJson(completion.riskFlagsJson()));
             run.setLatencyMs(Math.max(0L, completion.latencyMs()));
             run.setStatus(completion.status());
             run.setErrorCode(safeNullableCode(completion.errorCode()));
@@ -327,6 +331,34 @@ public class AgentRunService {
         return value.matches(primaryOnly) || value.matches(primaryAndFallback) ? value : null;
     }
 
+    private static String safeSafetyDecision(String value) {
+        if (value == null) return null;
+        return switch (value) {
+            case "ALLOW", "FALLBACK", "CLARIFY", "HANDOFF", "BLOCK" -> value;
+            default -> null;
+        };
+    }
+
+    private String safeRiskFlagsJson(String value) {
+        if (value == null || value.isBlank()) return "[]";
+        try {
+            com.fasterxml.jackson.databind.JsonNode root = canonicalMapper.readTree(value);
+            if (!root.isArray() || root.size() > 20) return "[]";
+            java.util.List<java.util.Map<String, String>> safe = new java.util.ArrayList<>();
+            for (com.fasterxml.jackson.databind.JsonNode item : root) {
+                if (!item.isObject() || item.size() != 2) return "[]";
+                String code = item.path("code").asText(null);
+                String severity = item.path("severity").asText(null);
+                if (code == null || !code.matches("[A-Z0-9_]{1,64}")) return "[]";
+                if (!java.util.Set.of("LOW", "MEDIUM", "HIGH", "CRITICAL").contains(severity)) return "[]";
+                safe.add(java.util.Map.of("code", code, "severity", severity));
+            }
+            return canonicalMapper.writeValueAsString(safe);
+        } catch (JsonProcessingException ex) {
+            return "[]";
+        }
+    }
+
     private String sha256(String value) {
         return sha256Static(value);
     }
@@ -380,7 +412,11 @@ public class AgentRunService {
             long latencyMs,
             String status,
             String errorCode,
-            String errorMessageSanitized
+            String errorMessageSanitized,
+            String providerStatus,
+            String safetyDecision,
+            String safetyReasonCode,
+            String riskFlagsJson
     ) {
     }
 }

@@ -1,7 +1,6 @@
 package travelcare_agent.agent;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -14,6 +13,14 @@ import travelcare_agent.agent.provider.ModelMessage;
 import travelcare_agent.agent.provider.ModelRequest;
 import travelcare_agent.agent.provider.ModelResponse;
 import travelcare_agent.agent.provider.ModelUsage;
+import travelcare_agent.agent.safety.ModelOutputParseException;
+import travelcare_agent.agent.safety.ModelSafetyContext;
+import travelcare_agent.agent.safety.ModelSafetyDecision;
+import travelcare_agent.agent.safety.ModelSafetyGate;
+import travelcare_agent.agent.safety.SafeModelResult;
+import travelcare_agent.agent.safety.StructuredModelOutput;
+import travelcare_agent.agent.safety.StructuredModelOutputParser;
+import travelcare_agent.answerability.CitationPolicy;
 import travelcare_agent.agentrun.entity.AgentRun;
 import travelcare_agent.agentrun.service.AgentRunService;
 import travelcare_agent.trace.SpanType;
@@ -28,6 +35,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class AgentModelService {
@@ -39,6 +47,8 @@ public class AgentModelService {
     private final AgentRunService agentRunService;
     private final ObjectMapper objectMapper;
     private final TraceService traceService;
+    private final StructuredModelOutputParser outputParser;
+    private final ModelSafetyGate safetyGate;
 
     @Autowired
     public AgentModelService(
@@ -48,7 +58,9 @@ public class AgentModelService {
             PromptTemplateService promptTemplateService,
             AgentRunService agentRunService,
             ObjectMapper objectMapper,
-            TraceService traceService
+            TraceService traceService,
+            StructuredModelOutputParser outputParser,
+            ModelSafetyGate safetyGate
     ) {
         this.primaryProvider = primaryProvider;
         this.fallbackProvider = fallbackProvider;
@@ -57,6 +69,8 @@ public class AgentModelService {
         this.agentRunService = agentRunService;
         this.objectMapper = objectMapper;
         this.traceService = traceService;
+        this.outputParser = outputParser;
+        this.safetyGate = safetyGate;
     }
 
     public AgentModelService(
@@ -67,7 +81,21 @@ public class AgentModelService {
             ObjectMapper objectMapper
     ) {
         this(primaryProvider, fallbackProvider, new AgentProviderProperties(), promptTemplateService,
-                agentRunService, objectMapper, null);
+                agentRunService, objectMapper, null,
+                new StructuredModelOutputParser(objectMapper), new ModelSafetyGate());
+    }
+
+    public AgentModelService(
+            ChatModelProvider primaryProvider,
+            MockChatModelProvider fallbackProvider,
+            AgentProviderProperties properties,
+            PromptTemplateService promptTemplateService,
+            AgentRunService agentRunService,
+            ObjectMapper objectMapper,
+            TraceService traceService
+    ) {
+        this(primaryProvider, fallbackProvider, properties, promptTemplateService, agentRunService, objectMapper,
+                traceService, new StructuredModelOutputParser(objectMapper), new ModelSafetyGate());
     }
 
     public MockIntentClassifier.IntentResult classifyIntentAndExtractSlots(
@@ -86,15 +114,28 @@ public class AgentModelService {
             List<Long> retrievalContextIds,
             String message
     ) {
+        return classifyIntentAndExtractSlotsSafely(
+                sessionId, workflowId, inputEventIds, retrievalContextIds, message).value();
+    }
+
+    public SafeModelResult<MockIntentClassifier.IntentResult> classifyIntentAndExtractSlotsSafely(
+            Long sessionId,
+            Long workflowId,
+            List<Long> inputEventIds,
+            List<Long> retrievalContextIds,
+            String message
+    ) {
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("message", message);
-        JsonNode output = invokeStructured(
+        SafeModelResult<StructuredModelOutput> result = invokeStructured(
                 sessionId, workflowId, inputEventIds, retrievalContextIds,
-                "INTENT_CLASSIFICATION", PromptTemplateService.INTENT_CLASSIFIER_V1, input
+                "INTENT_CLASSIFICATION", PromptTemplateService.INTENT_CLASSIFIER_V1, input,
+                ModelSafetyContext.intentClassification()
         );
-        return new MockIntentClassifier.IntentResult(
-                requiredText(output, "intent"), nullableText(output, "orderNo")
-        );
+        StructuredModelOutput output = result.value();
+        MockIntentClassifier.IntentResult value = new MockIntentClassifier.IntentResult(
+                output.intent(), output.slots().orderNo());
+        return new SafeModelResult<>(value, result.decision(), result.providerFallbackUsed());
     }
 
     public String generateCustomerAnswer(
@@ -113,23 +154,49 @@ public class AgentModelService {
             List<Long> retrievalContextIds,
             String deterministicAnswer
     ) {
-        Map<String, Object> input = new LinkedHashMap<>();
-        input.put("deterministicAnswer", deterministicAnswer);
-        JsonNode output = invokeStructured(
-                sessionId, workflowId, inputEventIds, retrievalContextIds,
-                "RESPONSE_GENERATION", PromptTemplateService.RESPONSE_GENERATOR_V1, input
-        );
-        return requiredText(output, "answer");
+        ModelSafetyContext safetyContext = new ModelSafetyContext(
+                "RESPONSE_GENERATION", Set.of("REFUND_INQUIRY", "ORDER_QUERY"), false, false,
+                CitationPolicy.FORBIDDEN, List.of(), List.of(), true, deterministicAnswer,
+                null, java.time.LocalDateTime.now());
+        return generateCustomerAnswerSafely(sessionId, workflowId, inputEventIds, retrievalContextIds,
+                deterministicAnswer, safetyContext).value();
     }
 
-    private JsonNode invokeStructured(
+    public SafeModelResult<String> generateCustomerAnswerSafely(
+            Long sessionId,
+            Long workflowId,
+            List<Long> inputEventIds,
+            List<Long> retrievalContextIds,
+            String deterministicAnswer,
+            ModelSafetyContext safetyContext
+    ) {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("deterministicAnswer", deterministicAnswer);
+        input.put("intent", safetyContext.allowedIntents().stream().findFirst().orElse("REFUND_INQUIRY"));
+        input.put("citations", safetyContext.allowedCitations().stream().map(citation -> {
+            Map<String, Object> value = new LinkedHashMap<>();
+            value.put("retrievalRunId", citation.retrievalRunId());
+            value.put("documentId", citation.documentId());
+            value.put("chunkId", citation.chunkId());
+            return value;
+        }).toList());
+        SafeModelResult<StructuredModelOutput> result = invokeStructured(
+                sessionId, workflowId, inputEventIds, retrievalContextIds,
+                "RESPONSE_GENERATION", PromptTemplateService.RESPONSE_GENERATOR_V1, input, safetyContext
+        );
+        return new SafeModelResult<>(result.decision().safeAnswer(), result.decision(),
+                result.providerFallbackUsed());
+    }
+
+    private SafeModelResult<StructuredModelOutput> invokeStructured(
             Long sessionId,
             Long workflowId,
             List<Long> inputEventIds,
             List<Long> retrievalContextIds,
             String operation,
             String promptVersion,
-        Map<String, Object> input
+            Map<String, Object> input,
+            ModelSafetyContext safetyContext
     ) {
         Instant startedAt = Instant.now();
         String requestHash = agentRunService.hashCanonical(Map.of(
@@ -162,7 +229,7 @@ public class AgentModelService {
                     ? modelError
                     : new ModelCallException("MODEL_REQUEST_PREPARATION_FAILED", "Model request preparation failed", ex);
             complete(run, startedAt, null, UsageTotals.empty(), false, "FAILED",
-                    mapped.code(), safePrimaryFailure(mapped.code()), null, null);
+                    mapped.code(), safePrimaryFailure(mapped.code()), null, null, "FAILED", null);
             throw mapped;
         }
 
@@ -171,21 +238,24 @@ public class AgentModelService {
         try {
             primary = invokeAttempt(primaryProvider, request, operation, promptVersion, false);
         } catch (AttemptFailure primaryFailure) {
-            return invokeFallback(run, startedAt, request, operation, promptVersion, primaryFailure);
+            return invokeFallback(run, startedAt, request, operation, promptVersion, primaryFailure, safetyContext);
         }
 
+        ModelSafetyDecision decision = safetyGate.evaluate(primary.parsed(), safetyContext);
+        recordSafetyTrace(operation, decision);
         complete(run, startedAt, primary.parsed(), UsageTotals.from(primary.response().usage()), false,
-                "SUCCESS", null, null, null, null);
-        return primary.parsed();
+                "SUCCESS", null, null, null, null, "SUCCESS", decision);
+        return new SafeModelResult<>(primary.parsed(), decision, false);
     }
 
-    private JsonNode invokeFallback(
+    private SafeModelResult<StructuredModelOutput> invokeFallback(
             AgentRun run,
             Instant startedAt,
             ModelRequest request,
             String operation,
             String promptVersion,
-            AttemptFailure primaryFailure
+            AttemptFailure primaryFailure,
+            ModelSafetyContext safetyContext
     ) {
         TraceContextHolder.TraceContext context = TraceContextHolder.current();
         if (traceService != null && context != null) {
@@ -196,15 +266,23 @@ public class AgentModelService {
         try {
             AttemptResult fallback = invokeAttempt(fallbackProvider, request, operation, promptVersion, true);
             UsageTotals totals = primaryUsage.plus(UsageTotals.from(fallback.response().usage()));
+            ModelSafetyDecision decision = safetyGate.evaluate(fallback.parsed(), safetyContext);
+            if ("MODEL_INVALID_RESPONSE".equals(primaryFailure.error.code())
+                    && decision.type() == travelcare_agent.agent.safety.ModelSafetyDecisionType.ALLOW) {
+                decision = new ModelSafetyDecision(
+                        travelcare_agent.agent.safety.ModelSafetyDecisionType.FALLBACK,
+                        "OUTPUT_CONTRACT_FALLBACK", List.of(), decision.safeAnswer());
+            }
+            recordSafetyTrace(operation, decision);
             complete(run, startedAt, fallback.parsed(), totals, true, "FALLBACK_SUCCESS",
                     primaryFailure.error.code(), safePrimaryFailure(primaryFailure.error.code()),
-                    fallbackProvider.providerName(), fallback.response().model());
-            return fallback.parsed();
+                    fallbackProvider.providerName(), fallback.response().model(), "FALLBACK_SUCCESS", decision);
+            return new SafeModelResult<>(fallback.parsed(), decision, true);
         } catch (AttemptFailure fallbackFailure) {
             UsageTotals totals = primaryUsage.plus(UsageTotals.from(usage(fallbackFailure.response)));
             complete(run, startedAt, null, totals, true, "FALLBACK_FAILED", "MODEL_FALLBACK_FAILED",
                     safeFallbackFailure(primaryFailure.error.code(), fallbackFailure.error.code()),
-                    fallbackProvider.providerName(), model(fallbackFailure.response));
+                    fallbackProvider.providerName(), model(fallbackFailure.response), "FALLBACK_FAILED", null);
             throw new ModelCallException(
                     "MODEL_FALLBACK_FAILED", "Deterministic model fallback failed", fallbackFailure.error);
         }
@@ -226,8 +304,7 @@ public class AgentModelService {
             if (response == null || response.content() == null || response.content().isBlank()) {
                 throw new ModelCallException("MODEL_EMPTY_RESPONSE", "Model returned empty content");
             }
-            JsonNode parsed = objectMapper.readTree(response.content());
-            validateResponse(operation, parsed);
+            StructuredModelOutput parsed = outputParser.parse(response.content());
             recordModelOutputTrace(operation, promptVersion, provider, response, parsed);
             if (traceService != null) {
                 traceService.finishSpanSuccess(span, null, Map.of(
@@ -235,9 +312,9 @@ public class AgentModelService {
                         "promptVersion", promptVersion));
             }
             return new AttemptResult(parsed, response);
-        } catch (JsonProcessingException ex) {
+        } catch (ModelOutputParseException ex) {
             ModelCallException mapped = new ModelCallException(
-                    "MODEL_INVALID_RESPONSE", "Model response was not valid JSON", ex);
+                    "MODEL_INVALID_RESPONSE", "Model response did not match the structured contract", ex);
             finishAttemptFailure(span, provider, mapped);
             throw new AttemptFailure(mapped, response);
         } catch (ModelCallException ex) {
@@ -254,28 +331,40 @@ public class AgentModelService {
     private void complete(
             AgentRun run,
             Instant startedAt,
-            JsonNode response,
+            StructuredModelOutput response,
             UsageTotals usage,
             boolean fallbackUsed,
             String status,
             String errorCode,
             String safeErrorSummary,
             String fallbackProviderName,
-            String fallbackModel
+            String fallbackModel,
+            String providerStatus,
+            ModelSafetyDecision safetyDecision
     ) {
         agentRunService.completeModelCall(run, new AgentRunService.ModelCallCompletion(
                 fallbackProviderName, fallbackModel,
                 response == null ? null : agentRunService.hashCanonical(response),
                 usage.inputTokens(), usage.outputTokens(), usage.totalTokens(), fallbackUsed,
-                Duration.between(startedAt, Instant.now()).toMillis(), status, errorCode, safeErrorSummary
+                Duration.between(startedAt, Instant.now()).toMillis(), status, errorCode, safeErrorSummary,
+                providerStatus,
+                safetyDecision == null ? null : safetyDecision.type().name(),
+                safetyDecision == null ? null : safetyDecision.reasonCode(),
+                safetyDecision == null ? "[]" : riskFlagsJson(safetyDecision)
         ));
+    }
+
+    private String riskFlagsJson(ModelSafetyDecision decision) {
+        return toJson(decision.riskFlags().stream().map(flag -> Map.of(
+                "code", flag.code(), "severity", flag.severity().name())).toList());
     }
 
     private void recordModelInputTrace(String operation, String promptVersion, Map<String, Object> input) {
         if (traceService != null) {
             traceService.recordCurrentSnapshot(TraceSnapshotType.MODEL_INPUT,
                     "MODEL_OPERATION", operation, Map.of(
-                            "operation", operation, "promptVersion", promptVersion, "input", input));
+                            "operation", operation, "promptVersion", promptVersion,
+                            "inputHash", agentRunService.hashCanonical(input)));
         }
     }
 
@@ -284,7 +373,7 @@ public class AgentModelService {
             String promptVersion,
             ChatModelProvider provider,
             ModelResponse response,
-            JsonNode parsed
+            StructuredModelOutput parsed
     ) {
         if (traceService == null) {
             return;
@@ -294,9 +383,25 @@ public class AgentModelService {
         snapshot.put("provider", provider.providerName());
         snapshot.put("model", response.model());
         snapshot.put("promptVersion", promptVersion);
-        snapshot.put("output", parsed);
+        snapshot.put("outputHash", agentRunService.hashCanonical(parsed));
         traceService.recordCurrentSnapshot(
                 TraceSnapshotType.MODEL_OUTPUT, "MODEL_OPERATION", operation, snapshot);
+    }
+
+    private void recordSafetyTrace(String operation, ModelSafetyDecision decision) {
+        if (traceService == null) return;
+        traceService.recordCurrentSnapshot(TraceSnapshotType.MODEL_SAFETY_DECISION, "MODEL_SAFETY", operation, Map.of(
+                "operation", operation,
+                "safetyDecision", decision.type().name(),
+                "reasonCode", decision.reasonCode(),
+                "riskFlags", decision.riskFlags().stream().map(flag -> Map.of(
+                        "code", flag.code(), "severity", flag.severity().name())).toList()
+        ));
+        TraceContextHolder.TraceContext context = TraceContextHolder.current();
+        if (context != null && decision.type() == travelcare_agent.agent.safety.ModelSafetyDecisionType.BLOCK) {
+            traceService.recordEvent(context.traceId(), context.spanId(), TraceEventType.GUARDRAIL_BLOCKED,
+                    "model-safety-blocked", Map.of("reasonCode", decision.reasonCode()));
+        }
     }
 
     private void finishAttemptFailure(
@@ -308,30 +413,6 @@ public class AgentModelService {
             traceService.finishSpanFailure(
                     span, error.code(), error, Map.of("provider", provider.providerName()));
         }
-    }
-
-    private void validateResponse(String operation, JsonNode parsed) {
-        if (parsed == null || !parsed.isObject()) {
-            throw new ModelCallException("MODEL_INVALID_RESPONSE", "Model response must be a JSON object");
-        }
-        String requiredField = "INTENT_CLASSIFICATION".equals(operation) ? "intent" : "answer";
-        String requiredValue = nullableText(parsed, requiredField);
-        if (requiredValue == null || requiredValue.isBlank()) {
-            throw new ModelCallException("MODEL_INVALID_RESPONSE", "Model response is missing a required field");
-        }
-    }
-
-    private String requiredText(JsonNode node, String field) {
-        String value = nullableText(node, field);
-        if (value == null || value.isBlank()) {
-            throw new ModelCallException("MODEL_INVALID_RESPONSE", "Model response is missing a required field");
-        }
-        return value;
-    }
-
-    private String nullableText(JsonNode node, String field) {
-        JsonNode value = node.path(field);
-        return value.isMissingNode() || value.isNull() ? null : value.asText();
     }
 
     private String toJson(Object value) {
@@ -376,7 +457,7 @@ public class AgentModelService {
         return value == null ? "" : value;
     }
 
-    private record AttemptResult(JsonNode parsed, ModelResponse response) {
+    private record AttemptResult(StructuredModelOutput parsed, ModelResponse response) {
     }
 
     private static final class AttemptFailure extends RuntimeException {

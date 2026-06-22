@@ -1,5 +1,6 @@
 package travelcare_agent.agent;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import travelcare_agent.answerability.AnswerabilityDecision;
 import travelcare_agent.answerability.AnswerabilityReasonCode;
@@ -20,6 +21,8 @@ import travelcare_agent.workflow.WorkflowRegistry;
 import travelcare_agent.workflow.repository.InMemoryWorkflowRepository;
 import travelcare_agent.workflow.repository.InMemoryWorkflowStepRepository;
 import travelcare_agent.workflow.workflows.OrderRefundInquiryWorkflow;
+import travelcare_agent.human.service.HumanReviewService;
+import travelcare_agent.refund.repository.RefundCaseRepository;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -32,8 +35,76 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class AgentOrchestratorTest {
+
+    @Test
+    void knowledgeIntentDoesNotStartRefundWorkflow() {
+        WorkflowEngine workflowEngine = org.mockito.Mockito.mock(WorkflowEngine.class);
+        ContextAssembler contextAssembler = org.mockito.Mockito.mock(ContextAssembler.class);
+        AgentModelService modelService = org.mockito.Mockito.mock(AgentModelService.class);
+        AnswerabilityDecision answerability = new AnswerabilityDecision(
+                AnswerabilityStatus.ANSWERABLE, AnswerabilityReasonCode.SUFFICIENT_CONTEXT,
+                AnswerabilityRequiredAction.ALLOW_MODEL, CitationPolicy.REQUIRED, List.of(101L),
+                false, false, false, List.of(), List.of(), null);
+        when(contextAssembler.assemble(101L, "What is the refund SOP?"))
+                .thenReturn(new AgentContext(List.of(), null, null, List.of(), List.of(), answerability));
+        var allow = new travelcare_agent.agent.safety.ModelSafetyDecision(
+                travelcare_agent.agent.safety.ModelSafetyDecisionType.ALLOW, "SAFE_OUTPUT", List.of(), "draft");
+        when(modelService.classifyIntentAndExtractSlotsSafely(
+                org.mockito.Mockito.anyLong(), org.mockito.Mockito.isNull(), org.mockito.Mockito.anyList(),
+                org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()))
+                .thenReturn(new travelcare_agent.agent.safety.SafeModelResult<>(
+                        new MockIntentClassifier.IntentResult("FAQ", null), allow, false));
+        when(modelService.generateCustomerAnswerSafely(
+                org.mockito.Mockito.anyLong(), org.mockito.Mockito.isNull(), org.mockito.Mockito.anyList(),
+                org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString(), org.mockito.Mockito.any()))
+                .thenReturn(new travelcare_agent.agent.safety.SafeModelResult<>("citation-safe answer", allow, false));
+
+        AgentOrchestrator orchestrator = new AgentOrchestrator(
+                new MockIntentClassifier(), new MockResponseGenerator(), workflowEngine,
+                org.mockito.Mockito.mock(HumanReviewService.class),
+                org.mockito.Mockito.mock(RefundCaseRepository.class), new ObjectMapper(),
+                contextAssembler, modelService);
+
+        AgentOrchestrator.AgentReply reply = orchestrator.handle(
+                new AgentOrchestrator.AgentRequest(101L, 1001L, "What is the refund SOP?"));
+
+        assertThat(reply.intent()).isEqualTo("FAQ");
+        assertThat(reply.workflowId()).isNull();
+        assertThat(reply.answer()).isEqualTo("citation-safe answer");
+        verify(workflowEngine, never()).start(org.mockito.Mockito.anyString(), org.mockito.Mockito.any());
+    }
+
+    @Test
+    void lowConfidenceMissingSlotClarifiesWithoutStartingWorkflow() {
+        WorkflowEngine workflowEngine = org.mockito.Mockito.mock(WorkflowEngine.class);
+        ContextAssembler contextAssembler = org.mockito.Mockito.mock(ContextAssembler.class);
+        AgentModelService modelService = org.mockito.Mockito.mock(AgentModelService.class);
+        when(contextAssembler.assemble(101L, "refund please"))
+                .thenReturn(new AgentContext(List.of(), null, null, List.of(), List.of()));
+        var clarify = new travelcare_agent.agent.safety.ModelSafetyDecision(
+                travelcare_agent.agent.safety.ModelSafetyDecisionType.CLARIFY,
+                "LOW_CONFIDENCE_MISSING_SLOT", List.of(), "Please provide an order reference.");
+        when(modelService.classifyIntentAndExtractSlotsSafely(
+                org.mockito.Mockito.anyLong(), org.mockito.Mockito.isNull(), org.mockito.Mockito.anyList(),
+                org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()))
+                .thenReturn(new travelcare_agent.agent.safety.SafeModelResult<>(
+                        new MockIntentClassifier.IntentResult("REFUND_INQUIRY", null), clarify, false));
+        AgentOrchestrator orchestrator = new AgentOrchestrator(
+                new MockIntentClassifier(), new MockResponseGenerator(), workflowEngine,
+                org.mockito.Mockito.mock(HumanReviewService.class),
+                org.mockito.Mockito.mock(RefundCaseRepository.class), new ObjectMapper(),
+                contextAssembler, modelService);
+
+        AgentOrchestrator.AgentReply reply = orchestrator.handle(
+                new AgentOrchestrator.AgentRequest(101L, 1001L, "refund please"));
+
+        assertThat(reply.workflowId()).isNull();
+        assertThat(reply.answer()).contains("order reference");
+        verify(workflowEngine, never()).start(org.mockito.Mockito.anyString(), org.mockito.Mockito.any());
+    }
 
     private static final Clock CLOCK = Clock.fixed(
             Instant.parse("2026-05-08T08:00:00Z"),
@@ -138,10 +209,14 @@ class AgentOrchestratorTest {
                 ),
                 modelService
         );
-        org.mockito.Mockito.when(modelService.classifyIntentAndExtractSlots(
+        org.mockito.Mockito.when(modelService.classifyIntentAndExtractSlotsSafely(
                 org.mockito.Mockito.anyLong(), org.mockito.Mockito.isNull(), org.mockito.Mockito.anyList(),
                 org.mockito.Mockito.anyList(), org.mockito.Mockito.anyString()
-        )).thenReturn(new MockIntentClassifier.IntentResult("FAQ", "ORD-12"));
+        )).thenReturn(new travelcare_agent.agent.safety.SafeModelResult<>(
+                new MockIntentClassifier.IntentResult("FAQ", "ORD-12"),
+                new travelcare_agent.agent.safety.ModelSafetyDecision(
+                        travelcare_agent.agent.safety.ModelSafetyDecisionType.ALLOW,
+                        "SAFE_OUTPUT", List.of(), null), false));
 
         AgentOrchestrator.AgentReply reply = orchestrator.handle(
                 new AgentOrchestrator.AgentRequest(101L, 1001L, "What policy supports refund order ORD-12?")

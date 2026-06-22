@@ -28,7 +28,8 @@ class MockChatModelProviderTest {
         ModelResponse second = provider.call(request);
 
         assertThat(first).isEqualTo(second);
-        assertThat(first.content()).isEqualTo("{\"intent\":\"REFUND_INQUIRY\",\"orderNo\":\"ORD-10\"}");
+        assertThat(first.content()).isEqualTo(
+                "{\"intent\":\"REFUND_INQUIRY\",\"confidence\":1.0,\"slots\":{\"orderNo\":\"ORD-10\",\"orderId\":null},\"citations\":[],\"riskFlags\":[]}");
         assertThat(first.model()).isEqualTo("mock-stage10a");
         assertThat(first.provider()).isEqualTo("mock");
         assertThat(first.usage()).isEqualTo(new ModelUsage(0, 0, 0));
