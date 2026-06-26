@@ -1,8 +1,6 @@
 HELP.md
 AGENT.md
 /docs/*
-!/docs/stage10/
-!/docs/stage10/*.md
 /engineering-knowledge02
 target/
 .mvn/wrapper/maven-wrapper.jar

@@ -1,10 +1,12 @@
-# TravelCare Agent
+# TravelCare-Agent
 
-> 面向旅行客服场景的受控 Agent 后端：模型负责理解与表达，后端负责事实、规则、执行、追踪和评测。
+> 旅游退款客服场景下的受控式 AI Agent 后端。
 
 ## 项目定位
 
-TravelCare Agent 是一个基于 Spring Boot 的模块化单体后端项目。它围绕“订单退款咨询”构建了一条可运行的 AI 客服链路，并把会话、RAG、Memory、确定性工作流、工具调用、异步任务、人工复核、执行追踪、诊断回放和离线评测组织为可持久化的工程闭环。
+TravelCare-Agent 是旅游退款客服场景下的受控式 AI Agent 后端。LLM 负责意图理解和回复草拟，确定性工作流负责事实查询、规则判断、工具授权、审计和异常恢复。
+
+项目基于 Spring Boot 模块化单体实现，围绕“订单退款咨询”构建可运行的 AI 客服链路，并把会话、RAG、Memory、确定性工作流、工具调用、异步任务、人工复核、执行追踪、诊断回放和离线评测组织为可持久化的工程闭环。
 
 这个项目当前可以准确描述为：
 
@@ -62,7 +64,7 @@ flowchart TD
 | RAG | 文档导入、段落分块、有效期过滤、FULLTEXT/LIKE 检索 | `KnowledgeIngestionService`、`RetrievalService` |
 | Answerability | 可回答性判断、引用准入、低质量证据拒绝、Fallback | `AnswerabilityService`、`CitationPolicy` |
 | Memory | 用户偏好和行程上下文 | `MemoryService` |
-| Agent | 固定编排、Prompt 版本、Mock/DeepSeek Provider | `AgentOrchestrator`、`AgentModelService` |
+| Agent | 固定编排、Prompt 版本、Mock/DeepSeek Provider、LLM Safety Gate | `AgentOrchestrator`、`AgentModelService`、`ModelSafetyGate` |
 | Human Review | Case 创建、分配、处理和工作流恢复 | `HumanReviewService` |
 | Audit | 关键业务动作及 evidence 持久化 | `AuditService` |
 | AgentRun | 模型调用和回复上下文追踪 | `AgentRunService` |
@@ -75,15 +77,16 @@ flowchart TD
 
 | 阶段 | 已完成内容 |
 | --- | --- |
-| Stage 1 | Session/Event、订单查询、退款咨询 Workflow、Tool Call、幂等、审计最小闭环 |
-| Stage 2 | 持久化 Workflow Task、RabbitMQ Worker、Redis Lock、Human Review、失败重试 |
-| Stage 3 | 知识导入与检索、Memory、上下文组装、RAG/Memory 业务边界 |
-| Stage 4 | AgentRun、只读 Replay、JUnit Golden Cases 和本地 Evaluation Report |
-| Stage 5 | Provider 抽象、Mock/DeepSeek 切换、Prompt 版本、模型调用追踪和安全降级 |
-| Stage 6 | README、架构定位和面试表达收口，明确能力与非能力边界 |
-| Stage 7 | Agent Execution Trace、诊断聚合、Snapshot、Diagnostic Dry Run 和 Trace Diff |
-| Stage 8 | 持久化 Evaluation Dataset/Case/Run、确定性 Scorer、Baseline Promotion 和 Regression Comparison |
-| Stage 9 | RAG Answerability Gate、结构化 Citation、拒绝原因和 RAG 质量评测 Scorer |
+| Stage 1 | 退款咨询最小闭环 |
+| Stage 2 | RAG 与知识检索 |
+| Stage 3 | Trace 与可回放基础 |
+| Stage 4 | Evaluation 初版 |
+| Stage 5 | Provider 与真实 LLM 可选接入 |
+| Stage 6 | 文档与展示增强 |
+| Stage 7 | Trace、Diagnostics、Dry Run、Diff |
+| Stage 8 | Persistent Evaluation 与 Baseline Regression |
+| Stage 9 | RAG Answerability 与 Citation Gate |
+| Stage 10 | 真实 LLM 可控运行，包括 Provider 抽象、AgentRun Tracking、LLM Safety Gate |
 
 ## RAG 与 Answerability
 
@@ -101,7 +104,9 @@ Stage 9 在“检索命中”与“允许回答”之间增加了 Answerability 
 
 ## Agent 与 LLM 边界
 
-`AgentOrchestrator` 使用固定编排完成上下文组装、意图识别、工作流启动、人工复核和回复生成。模型输出经过结构化 JSON 基础校验，失败时可以记录失败 AgentRun 并降级到 Mock Provider。
+`AgentOrchestrator` 使用固定编排完成上下文组装、意图识别、工作流启动、人工复核和回复生成。Stage 10 将模型调用统一到 `ChatModelProvider`，使用单条逻辑 AgentRun 记录 Provider、Prompt 版本、请求/响应 hash、token、fallback 和 Safety Decision。
+
+模型输出必须通过严格结构化解析和 `ModelSafetyGate`。Safety Gate 可以给出 `ALLOW`、`FALLBACK`、`CLARIFY`、`HANDOFF` 或 `BLOCK`，并在输出包含危险业务承诺、敏感信息、越权工具提议、伪造 Citation 或退款规则冲突时失败关闭。Stage 10 v1 只允许 `GetOrderTool / READ_ORDER` 作为候选只读提议，模型本身不会执行工具。
 
 LLM 可以：
 
@@ -117,6 +122,12 @@ LLM 不可以：
 - 将 RAG 或 Memory 当成业务授权依据。
 
 因此，本项目是**规则工作流主导的受控 Agent**，不是自主规划、多 Agent 协作或模型直接执行工具的通用 Agent。
+
+### Stage 10 收口
+
+- **Stage 10A - Provider Abstraction**：使用统一 `ChatModelProvider` 接入确定性 Mock 和可选 DeepSeek，网络、超时、HTTP 和响应错误转换为安全错误并允许确定性 fallback。
+- **Stage 10B - AgentRun Tracking**：一次 `AgentModelService` 调用对应一条逻辑 AgentRun，记录 Provider 模式、Prompt 版本、请求/响应 hash、token、fallback、Trace 和安全错误码，不持久化完整 Prompt 或 Provider 原始响应。
+- **Stage 10C - LLM Safety Gate**：Provider 输出经过严格结构化解析、Citation 校验、危险承诺检测、敏感信息检测、Tool Proposal 白名单和退款 Policy 冲突检查；最终结果为 `ALLOW`、`FALLBACK`、`CLARIFY`、`HANDOFF` 或 `BLOCK`。
 
 ## Trace、Replay 与 Dry Run
 
@@ -215,7 +226,7 @@ GET    /api/evaluation/datasets/{datasetId}/baseline
 | 诊断差异 | `agent_trace_diffs` |
 | 离线评测 | `evaluation_datasets`、`evaluation_cases`、`evaluation_runs`、`evaluation_case_results`、`evaluation_baselines` |
 
-Flyway migration 当前为 V1-V10。
+Flyway migration 当前为 V1-V12。
 
 ## 本地运行
 
@@ -273,29 +284,89 @@ $env:TRAVELCARE_AGENT_TIMEOUT_MS = "8000"
 .\mvnw.cmd test
 ```
 
-最近一次本地全量验证（2026-06-21）：
+当前 Release Candidate 基线：
 
 ```text
-Tests run: 173
+Tests: 200
 Failures: 0
 Errors: 0
 Skipped: 0
-Flyway migrations validated: 10
+Flyway migrations: V1 到 V12
+Provider mode: mock
+Exit code: 0
 ```
 
 包含 Spring 上下文的集成测试会连接本地 MySQL、Redis 和 RabbitMQ，因此该结果不是完全无基础设施依赖的内存测试。
 
+## Release Candidate 状态
+
+Stage 10 已完成，当前功能已经不建议继续横向堆 Stage，也不建议开启 Stage 11。下一步目标是 RC 总体验收，包括 CI、空库 Flyway、Compose healthcheck、五分钟 Demo、已知限制和展示证据。
+
+RC 收口文档：
+
+- [RC 验收清单](docs/release-candidate/acceptance.md)
+- [RC 已知限制](docs/release-candidate/known-limits.md)
+- [Stage 10A Provider Abstraction](docs/stage10/10A-provider-abstraction.md)
+- [Stage 10B AgentRun Tracking](docs/stage10/10B-agent-run-tracking.md)
+- [Stage 10C LLM Safety Gate](docs/stage10/10C-llm-safety-gate.md)
+
+### 五分钟 Demo 入口
+
+前提：使用 `docker compose -f travelcare_dev/docker-compose.yaml up -d` 启动 MySQL、Redis、RabbitMQ，应用以默认 `mock` Provider 运行。
+
+1. 创建会话：
+
+```http
+POST /api/sessions
+Content-Type: application/json
+
+{"userId":1001,"channel":"WEB"}
+```
+
+2. 使用可退款 Mock 订单发送同步咨询：
+
+```http
+POST /api/sessions/{sessionId}/messages
+Content-Type: application/json
+
+{"content":"Can I refund order ORD-1001?","idempotencyKey":"rc-demo-001","async":false}
+```
+
+3. 从响应获取 `traceId`，依次下钻：
+
+```http
+GET  /api/agent-traces/{traceId}
+GET  /api/agent-traces/{traceId}/diagnostics
+POST /api/agent-traces/{traceId}/dry-run
+Content-Type: application/json
+
+{"reason":"rc-five-minute-demo","providerMode":"mock","compareAfterRun":true}
+```
+
+4. 从 Dry Run 响应获取 `dryRunTraceId`，查看差异：
+
+```http
+GET /api/agent-traces/{traceId}/diffs/{dryRunTraceId}
+```
+
+5. 展示证据：退款结论来自 `RefundEligibilityPolicy`，Tool Call 有幂等记录，Trace 可下钻，Dry Run 不产生业务副作用，Diff 给出变化和风险等级。
+
 ## 项目边界与已知限制
 
-- 订单数据来自 `MockOrderAdapter`，没有真实供应商 Adapter 或契约测试。
-- 不执行真实支付、退款、取消或改签。
+- 没有真实退款。
+- 没有真实支付。
+- 没有真实供应商订单系统；订单数据来自 `MockOrderAdapter`。
+- 没有完整认证授权。
+- 没有完整 Outbox、Publisher Confirm、DLQ。
+- 没有 OpenTelemetry、Actuator、Metrics、Alerting。
+- Human Review 是后端复核 Case，不是完整坐席系统。
 - DeepSeek Adapter 已实现，但真实网络、限流、费用、SLA 和供应商错误契约未完成生产验证。
 - RAG 使用 MySQL FULLTEXT/LIKE，不是向量检索；没有 embedding、reranker 或大规模知识同步。
-- RabbitMQ 已用于异步任务，但没有完整事务 Outbox、Publisher Confirm、DLQ 和积压治理。
-- JWT 相关配置不等于已完成认证授权；当前不能视为具备生产安全边界。
 - Trace、Replay 和 Evaluation 可能包含业务上下文；虽然已有预览和脱敏处理，仍需继续做字段级最小化与权限控制。
 - Evaluation 固定使用 Mock Provider 和 Snapshot，不代表真实 LLM 质量或线上效果。
-- 当前是学习与面试展示项目，不宣称可以直接承载真实资金业务。
+- 当前不能宣称真实生产上线。
+- 当前定位是可运行、可验证、可展示的 AI Agent 后端原型。
+- 当前不是通用 Agent Platform，不追 Spring AI、LangGraph、MCP、多 Agent、微服务和管理后台。
 
 ## 目录索引
 
@@ -303,6 +374,7 @@ Flyway migrations validated: 10
 src/main/java/travelcare_agent/
 ├── conversation/   会话与事件
 ├── agent/          Orchestrator、Prompt、Provider
+│   └── safety/     Structured Output 与 LLM Safety Gate
 ├── workflow/       工作流、任务与 Worker
 ├── tool/           工具调用与幂等
 ├── retrieval/      知识导入与检索
