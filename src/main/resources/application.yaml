@@ -13,8 +13,16 @@ spring:
       password: ${TRAVELCARE_REDIS_PASSWORD:}
       database: ${TRAVELCARE_REDIS_DATABASE:0}
       timeout: 3s
+  rabbitmq:
+    publisher-confirm-type: correlated
 
 travelcare:
+  async:
+    outbox:
+      max-publish-attempts: ${TRAVELCARE_OUTBOX_MAX_PUBLISH_ATTEMPTS:3}
+      retry-delay: ${TRAVELCARE_OUTBOX_RETRY_DELAY:1m}
+      stale-publishing-after: ${TRAVELCARE_OUTBOX_STALE_PUBLISHING_AFTER:5m}
+      confirm-timeout: ${TRAVELCARE_OUTBOX_CONFIRM_TIMEOUT:5s}
   agent:
     provider: ${TRAVELCARE_AGENT_PROVIDER:mock}
     model: ${TRAVELCARE_AGENT_MODEL:mock-stage10a}

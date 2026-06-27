@@ -24,6 +24,9 @@ public class ToolCall {
     private Integer retryCount;
     private LocalDateTime timeoutAt;
     private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+    private Boolean reconciliationRequired;
+    private String lastErrorCode;
     private String traceId;
     private String spanId;
 
@@ -53,9 +56,22 @@ public class ToolCall {
         this.responseJson = responseJson;
     }
 
+    public void fail(String responseJson, String errorCode) {
+        fail(responseJson);
+        this.lastErrorCode = errorCode;
+        this.updatedAt = LocalDateTime.now();
+    }
+
     public void unknown(String responseJson) {
         this.status = ToolCallStatus.UNKNOWN;
         this.responseJson = responseJson;
+        this.reconciliationRequired = true;
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    public void unknown(String responseJson, String errorCode) {
+        unknown(responseJson);
+        this.lastErrorCode = errorCode;
     }
 
     public record ToolCommandFields(
@@ -173,6 +189,12 @@ public class ToolCall {
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
     }
+    public LocalDateTime getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public Boolean getReconciliationRequired() { return reconciliationRequired; }
+    public void setReconciliationRequired(Boolean reconciliationRequired) { this.reconciliationRequired = reconciliationRequired; }
+    public String getLastErrorCode() { return lastErrorCode; }
+    public void setLastErrorCode(String lastErrorCode) { this.lastErrorCode = lastErrorCode; }
     public String getTraceId() { return traceId; }
     public void setTraceId(String traceId) { this.traceId = traceId; }
     public String getSpanId() { return spanId; }

@@ -18,6 +18,12 @@ public class MyBatisToolCallRepository implements ToolCallRepository {
 
     @Override
     public ToolCall save(ToolCall toolCall) {
+        if (toolCall.getUpdatedAt() == null) {
+            toolCall.setUpdatedAt(java.time.LocalDateTime.now());
+        }
+        if (toolCall.getReconciliationRequired() == null) {
+            toolCall.setReconciliationRequired(false);
+        }
         if (toolCall.getId() == null) {
             mapper.insert(toolCall);
         } else {

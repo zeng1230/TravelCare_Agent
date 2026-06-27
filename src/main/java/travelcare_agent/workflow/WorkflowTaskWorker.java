@@ -2,6 +2,7 @@ package travelcare_agent.workflow;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.amqp.AmqpRejectAndDontRequeueException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -131,17 +132,18 @@ public class WorkflowTaskWorker {
     }
 
     @RabbitListener(queues = RabbitMqConfig.QUEUE_WORKFLOW_TASKS)
-    public void processTask(Map<String, Object> messagePayload) {
+    public void processTask(Object rawPayload) {
+        Map<String, Object> messagePayload = parseMessagePayload(rawPayload);
         Long taskId = extractLong(messagePayload.get("taskId"));
         if (taskId == null) {
             log.error("Received message without taskId");
-            return;
+            throw new AmqpRejectAndDontRequeueException("workflow task message missing taskId");
         }
 
         WorkflowTask task = taskRepository.findById(taskId).orElse(null);
         if (task == null) {
             log.error("Task {} not found", taskId);
-            return;
+            throw new AmqpRejectAndDontRequeueException("workflow task not found: " + taskId);
         }
 
         String traceId = stringValue(messagePayload.get("traceId"));
@@ -153,6 +155,7 @@ public class WorkflowTaskWorker {
                 ? TraceContextHolder.attach(asyncSpan.traceId(), asyncSpan.spanId()) : null) {
         if (task.getStatus() != WorkflowTaskStatus.PENDING && task.getStatus() != WorkflowTaskStatus.DISPATCHED) {
             log.info("Task {} is in status {}, skipping", taskId, task.getStatus());
+            taskService.recordSkipped(taskId, "TERMINAL_OR_NON_RUNNABLE_STATUS");
             return;
         }
 
@@ -163,6 +166,7 @@ public class WorkflowTaskWorker {
                 // Re-fetch inside lock to ensure we have latest state
                 WorkflowTask lockedTask = taskRepository.findById(taskId).orElseThrow();
                 if (lockedTask.getStatus() != WorkflowTaskStatus.PENDING && lockedTask.getStatus() != WorkflowTaskStatus.DISPATCHED) {
+                    taskService.recordSkipped(taskId, "STALE_AFTER_LOCK");
                     return null;
                 }
                 
@@ -172,15 +176,31 @@ public class WorkflowTaskWorker {
             });
         } catch (IllegalStateException e) {
             log.warn("Lock conflict for task {}: {}", taskId, e.getMessage());
-            // Lock conflict, could retry or let it fail
-            taskService.incrementRetry(taskId, "LOCK_CONFLICT", "Could not acquire lock", LocalDateTime.now().plusMinutes(1));
+            taskService.handleWorkerFailure(taskId, "LOCK_CONFLICT", "Could not acquire lock",
+                    LocalDateTime.now().plusMinutes(1), traceId);
         } catch (Exception e) {
             log.error("Error executing task {}", taskId, e);
-            taskService.incrementRetry(taskId, "SYSTEM_ERROR", e.getMessage(), LocalDateTime.now().plusMinutes(1));
+            taskService.handleWorkerFailure(taskId, "SYSTEM_ERROR", e.getMessage(),
+                    LocalDateTime.now().plusMinutes(1), traceId);
         }
         } finally {
             if (traceService != null) traceService.finishSpanSuccess(asyncSpan, "WORKFLOW_TASK:" + taskId, Map.of());
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseMessagePayload(Object rawPayload) {
+        if (rawPayload instanceof Map<?, ?> map) {
+            return (Map<String, Object>) map;
+        }
+        if (rawPayload instanceof String text) {
+            try {
+                return objectMapper.readValue(text, new TypeReference<>() {});
+            } catch (Exception ex) {
+                throw new AmqpRejectAndDontRequeueException("invalid workflow task payload", ex);
+            }
+        }
+        throw new AmqpRejectAndDontRequeueException("unsupported workflow task payload type");
     }
 
     private void executeWorkflow(WorkflowTask task) {

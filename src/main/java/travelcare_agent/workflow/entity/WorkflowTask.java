@@ -24,6 +24,9 @@ public class WorkflowTask {
     private LocalDateTime lockedUntil;
     private String lastErrorCode;
     private String lastErrorMessage;
+    private String lastSkippedReason;
+    private String deadLetterReason;
+    private Long lastOutboxEventId;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -129,6 +132,30 @@ public class WorkflowTask {
 
     public void setLastErrorMessage(String lastErrorMessage) {
         this.lastErrorMessage = lastErrorMessage;
+    }
+
+    public String getLastSkippedReason() {
+        return lastSkippedReason;
+    }
+
+    public void setLastSkippedReason(String lastSkippedReason) {
+        this.lastSkippedReason = lastSkippedReason;
+    }
+
+    public String getDeadLetterReason() {
+        return deadLetterReason;
+    }
+
+    public void setDeadLetterReason(String deadLetterReason) {
+        this.deadLetterReason = deadLetterReason;
+    }
+
+    public Long getLastOutboxEventId() {
+        return lastOutboxEventId;
+    }
+
+    public void setLastOutboxEventId(Long lastOutboxEventId) {
+        this.lastOutboxEventId = lastOutboxEventId;
     }
 
     public LocalDateTime getCreatedAt() {

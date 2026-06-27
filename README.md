@@ -1,5 +1,20 @@
 # TravelCare-Agent
 
+## PR-1B Async Reliability Boundary
+
+- PR-1A Security Boundary is complete. Spring Security remains enabled and PR-1A 401/403 behavior must continue to pass.
+- Current work is **PR-1B Async Reliability Boundary**, not Stage 11.
+- PR-1B is reliability hardening for RabbitMQ, Worker, Tool Call, Workflow, Outbox, DLQ, retry, timeout, and reconciliation. It is not a new AI feature phase.
+- Tests remain fixed to `travelcare.agent.provider=mock`; they must not call DeepSeek or any real LLM provider.
+- PR-1B adds Outbox Lite with `payload_version=v1`, publisher confirm handling, stale `PUBLISHING` recovery, dedupe keys, database-driven delayed retry, sanitized DLQ messages, and mock reconciliation for eligible UNKNOWN side-effecting calls.
+- Design document: [`docs/pr1/async-reliability-boundary.md`](docs/pr1/async-reliability-boundary.md).
+
+Test command:
+
+```powershell
+.\mvnw.cmd test
+```
+
 ## Production Readiness Phase 1
 
 TravelCare-Agent 已完成 RC 验收，当前进入 **Production Readiness Phase 1**，阶段名称为

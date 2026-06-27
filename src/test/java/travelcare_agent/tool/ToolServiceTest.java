@@ -11,6 +11,7 @@ import travelcare_agent.tool.entity.IdempotencyKey;
 import travelcare_agent.tool.repository.IdempotencyKeyRepository;
 import travelcare_agent.tool.repository.ToolCallRepository;
 import travelcare_agent.tool.tools.GetOrderTool;
+import travelcare_agent.reconciliation.ReconciliationService;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -22,6 +23,10 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 class ToolServiceTest {
 
@@ -103,7 +108,7 @@ class ToolServiceTest {
     }
 
     @Test
-    void recordsUnknownWhenAdapterThrowsUnexpectedException() {
+    void recordsFailedTimeoutForReadOnlyAdapterException() {
         Fixture fixture = Fixture.withFailingAdapter();
 
         assertThatThrownBy(() -> fixture.getOrderTool.execute(request("tool:get_order:20:10")))
@@ -111,8 +116,38 @@ class ToolServiceTest {
                 .hasMessage("adapter timeout");
 
         ToolCall toolCall = fixture.toolCallRepository.only();
+        assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
+        assertThat(toolCall.getResponseJson()).contains("TOOL_TIMEOUT");
+        assertThat(toolCall.getReconciliationRequired()).isFalse();
+    }
+
+    @Test
+    void recordsUnknownAndCreatesReconciliationForSideEffectingTimeout() {
+        InMemoryToolCallRepository toolCallRepository = new InMemoryToolCallRepository();
+        IdempotencyKeyRepository idempotencyKeyRepository = new InMemoryIdempotencyKeyRepository();
+        IdempotencyService idempotencyService = new IdempotencyService(idempotencyKeyRepository);
+        ReconciliationService reconciliationService = mock(ReconciliationService.class);
+        ToolService service = new ToolService(
+                toolCallRepository,
+                idempotencyService,
+                new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(),
+                null,
+                reconciliationService);
+
+        ToolService.ToolCommand command = new ToolService.ToolCommand(
+                101L, 20L, 30L, "RefundTool", "tool:refund:1",
+                "hash-1", "{\"refundId\":1}", LocalDateTime.now().plusSeconds(1), true);
+
+        assertThatThrownBy(() -> service.execute(command, String.class, () -> {
+            throw new java.util.concurrent.CompletionException(
+                    new java.util.concurrent.TimeoutException("supplier timeout"));
+        })).isInstanceOf(java.util.concurrent.CompletionException.class);
+
+        ToolCall toolCall = toolCallRepository.only();
         assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.UNKNOWN);
-        assertThat(toolCall.getResponseJson()).contains("UNKNOWN_TOOL_ERROR");
+        assertThat(toolCall.getReconciliationRequired()).isTrue();
+        verify(reconciliationService).createOrReusePending(
+                eq("tool_call"), eq(toolCall.getId()), eq("TOOL_TIMEOUT"), any());
     }
 
     private static GetOrderTool.GetOrderRequest request(String idempotencyKey) {
@@ -187,6 +222,9 @@ class ToolServiceTest {
         public ToolCall save(ToolCall toolCall) {
             if (toolCall.getId() == null) {
                 toolCall.setId(ids.incrementAndGet());
+            }
+            if (toolCall.getReconciliationRequired() == null) {
+                toolCall.setReconciliationRequired(false);
             }
             calls.put(toolCall.getId(), toolCall);
             return toolCall;

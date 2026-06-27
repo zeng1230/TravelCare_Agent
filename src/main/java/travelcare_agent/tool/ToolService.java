@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.tool.entity.ToolCall;
 import travelcare_agent.tool.repository.ToolCallRepository;
+import travelcare_agent.reconciliation.ReconciliationService;
 
 import java.time.LocalDateTime;
 import java.util.function.Supplier;
@@ -20,14 +21,17 @@ public class ToolService {
     private final IdempotencyService idempotencyService;
     private final ObjectMapper objectMapper;
     private final TraceService traceService;
+    private final ReconciliationService reconciliationService;
 
     @Autowired
-    public ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService, TraceService traceService) {
-        this(toolCallRepository, idempotencyService, new ObjectMapper().findAndRegisterModules(), traceService);
+    public ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService, TraceService traceService,
+            @Autowired(required = false) ReconciliationService reconciliationService) {
+        this(toolCallRepository, idempotencyService, new ObjectMapper().findAndRegisterModules(), traceService,
+                reconciliationService);
     }
 
     public ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService) {
-        this(toolCallRepository, idempotencyService, new ObjectMapper().findAndRegisterModules(), null);
+        this(toolCallRepository, idempotencyService, new ObjectMapper().findAndRegisterModules(), null, null);
     }
 
     ToolService(
@@ -35,15 +39,21 @@ public class ToolService {
             IdempotencyService idempotencyService,
             ObjectMapper objectMapper
     ) {
-        this(toolCallRepository, idempotencyService, objectMapper, null);
+        this(toolCallRepository, idempotencyService, objectMapper, null, null);
     }
 
     ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService,
             ObjectMapper objectMapper, TraceService traceService) {
+        this(toolCallRepository, idempotencyService, objectMapper, traceService, null);
+    }
+
+    ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService,
+            ObjectMapper objectMapper, TraceService traceService, ReconciliationService reconciliationService) {
         this.toolCallRepository = toolCallRepository;
         this.idempotencyService = idempotencyService;
         this.objectMapper = objectMapper;
         this.traceService = traceService;
+        this.reconciliationService = reconciliationService;
     }
 
     public <T> ToolExecution<T> execute(ToolCommand command, Class<T> resultType, Supplier<T> action) {
@@ -94,16 +104,24 @@ public class ToolService {
             if (traceService != null) traceService.finishSpanSuccess(span, "TOOL_CALL:" + toolCall.getId(), Map.of("status", toolCall.getStatus().name()));
             return new ToolExecution<>(toolCall, result, false);
         } catch (BusinessException ex) {
-            toolCall.fail(errorJson(ex.getResultCode().code(), ex.getMessage()));
+            toolCall.fail(errorJson(ex.getResultCode().code(), ex.getMessage()), ex.getResultCode().code());
             toolCallRepository.save(toolCall);
             idempotencyService.markFailed(command.idempotencyKey());
             if (traceService != null) traceService.finishSpanFailure(span, ex.getResultCode().code(), ex, Map.of("toolCallId", toolCall.getId()));
             throw ex;
         } catch (RuntimeException ex) {
-            toolCall.unknown(errorJson("UNKNOWN_TOOL_ERROR", ex.getMessage()));
+            String errorCode = isTimeout(ex) ? "TOOL_TIMEOUT" : "UNKNOWN_TOOL_ERROR";
+            if (command.sideEffectingExternalCall() && isTimeout(ex)) {
+                toolCall.unknown(errorJson(errorCode, safeMessage(ex)), errorCode);
+            } else {
+                toolCall.fail(errorJson(errorCode, safeMessage(ex)), errorCode);
+            }
             toolCallRepository.save(toolCall);
+            if (toolCall.getStatus() == travelcare_agent.enums.ToolCallStatus.UNKNOWN && reconciliationService != null) {
+                reconciliationService.createOrReusePending("tool_call", toolCall.getId(), errorCode, toolCall.getTraceId());
+            }
             idempotencyService.markFailed(command.idempotencyKey());
-            if (traceService != null) traceService.finishSpanFailure(span, "UNKNOWN_TOOL_ERROR", ex, Map.of("toolCallId", toolCall.getId()));
+            if (traceService != null) traceService.finishSpanFailure(span, errorCode, ex, Map.of("toolCallId", toolCall.getId()));
             throw ex;
         }
     }
@@ -132,6 +150,25 @@ public class ToolService {
         }
     }
 
+    private static boolean isTimeout(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            String message = current.getMessage();
+            if (current instanceof java.util.concurrent.TimeoutException
+                    || current instanceof java.net.SocketTimeoutException
+                    || (message != null && message.toLowerCase(java.util.Locale.ROOT).contains("timeout"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        String message = throwable.getMessage();
+        return message == null ? throwable.getClass().getSimpleName() : message;
+    }
+
     private static Map<String, Object> snapshotMap(String toolName, Long workflowId, String request,
             String status, Boolean reused, Object result) {
         Map<String, Object> value = new java.util.LinkedHashMap<>();
@@ -152,8 +189,20 @@ public class ToolService {
             String idempotencyKey,
             String requestHash,
             String requestJson,
-            LocalDateTime timeoutAt
+            LocalDateTime timeoutAt,
+            boolean sideEffectingExternalCall
     ) {
+        public ToolCommand(
+                Long sessionId,
+                Long workflowId,
+                Long stepId,
+                String toolName,
+                String idempotencyKey,
+                String requestHash,
+                String requestJson,
+                LocalDateTime timeoutAt) {
+            this(sessionId, workflowId, stepId, toolName, idempotencyKey, requestHash, requestJson, timeoutAt, false);
+        }
     }
 
     public record ToolExecution<T>(ToolCall toolCall, T result, boolean reused) {

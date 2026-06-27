@@ -174,7 +174,7 @@ class WorkflowTaskWorkerTest {
 
         worker.processTask(payload);
 
-        verify(taskService).incrementRetry(eq(1L), eq("LOCK_CONFLICT"), anyString(), any());
+        verify(taskService).handleWorkerFailure(eq(1L), eq("LOCK_CONFLICT"), anyString(), any(), any());
         verify(workflowEngine, never()).resume(anyLong(), anyString(), any());
     }
 
@@ -194,7 +194,7 @@ class WorkflowTaskWorkerTest {
 
         worker.processTask(payload);
 
-        verify(taskService).incrementRetry(eq(1L), eq("SYSTEM_ERROR"), eq("DB down"), any());
+        verify(taskService).handleWorkerFailure(eq(1L), eq("SYSTEM_ERROR"), eq("DB down"), any(), any());
     }
 
     @Test
@@ -226,6 +226,6 @@ class WorkflowTaskWorkerTest {
                 eq("WORKFLOW_RESUME_FAILED"),
                 any(RuntimeException.class)
         );
-        verify(taskService).incrementRetry(eq(1L), eq("SYSTEM_ERROR"), eq("workflow resume failed"), any());
+        verify(taskService).handleWorkerFailure(eq(1L), eq("SYSTEM_ERROR"), eq("workflow resume failed"), any(), any());
     }
 }
