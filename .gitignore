@@ -1,6 +1,8 @@
 HELP.md
 AGENT.md
 /docs/*
+!/docs/pr1/
+!/docs/pr1/security-boundary.md
 /engineering-knowledge02
 target/
 .mvn/wrapper/maven-wrapper.jar

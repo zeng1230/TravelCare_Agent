@@ -2,6 +2,8 @@ package travelcare_agent.api;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,6 +14,7 @@ import travelcare_agent.agentrun.service.AgentRunReplayService;
 import travelcare_agent.agentrun.service.AgentRunService;
 import travelcare_agent.common.result.PageResult;
 import travelcare_agent.common.result.Result;
+import travelcare_agent.security.AuthorizationService;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -22,29 +25,43 @@ public class AgentRunController {
 
     private final AgentRunService agentRunService;
     private final AgentRunReplayService agentRunReplayService;
+    private final AuthorizationService authorizationService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public AgentRunController(AgentRunService agentRunService, AgentRunReplayService agentRunReplayService) {
+        this(agentRunService, agentRunReplayService, null);
+    }
+
+    @Autowired
+    public AgentRunController(AgentRunService agentRunService, AgentRunReplayService agentRunReplayService,
+            AuthorizationService authorizationService) {
         this.agentRunService = agentRunService;
         this.agentRunReplayService = agentRunReplayService;
+        this.authorizationService = authorizationService;
     }
 
     @GetMapping("/agent-runs/{agentRunId}")
+    @PreAuthorize("hasRole('ADMIN')")
     public Result<AgentRunResponse> getAgentRun(@PathVariable Long agentRunId) {
         return Result.success(AgentRunResponse.from(agentRunService.getRun(agentRunId), objectMapper));
     }
 
     @GetMapping("/agent-runs/{agentRunId}/replay")
+    @PreAuthorize("hasRole('ADMIN')")
     public Result<AgentRunReplayService.AgentRunReplayResponse> replayAgentRun(@PathVariable Long agentRunId) {
         return Result.success(agentRunReplayService.replay(agentRunId));
     }
 
     @GetMapping("/sessions/{sessionId}/agent-runs")
+    @PreAuthorize("hasAnyRole('USER','ADMIN')")
     public Result<PageResult<AgentRunResponse>> listSessionAgentRuns(
             @PathVariable Long sessionId,
             @RequestParam(defaultValue = "1") Long pageNo,
             @RequestParam(defaultValue = "20") Long pageSize
     ) {
+        if (authorizationService != null) {
+            authorizationService.requireSessionAccess(sessionId);
+        }
         AgentRunService.AgentRunPage page = agentRunService.listRunsBySession(sessionId, pageNo, pageSize);
         List<AgentRunResponse> records = page.records().stream()
                 .map(run -> AgentRunResponse.from(run, objectMapper))

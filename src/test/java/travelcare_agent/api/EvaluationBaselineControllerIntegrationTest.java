@@ -13,6 +13,7 @@ import travelcare_agent.evaluation.entity.EvaluationRun;
 import travelcare_agent.evaluation.repository.EvaluationBaselineRepository;
 import travelcare_agent.evaluation.repository.EvaluationDatasetRepository;
 import travelcare_agent.evaluation.repository.EvaluationRunRepository;
+import travelcare_agent.security.SecurityTestTokenFactory;
 
 import java.time.LocalDateTime;
 
@@ -26,6 +27,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @Transactional
 class EvaluationBaselineControllerIntegrationTest {
+    private static final String EVALUATOR_TOKEN = SecurityTestTokenFactory.bearer(9001L, "default", "EVALUATOR");
+
     @Autowired private MockMvc mvc;
     @Autowired private EvaluationDatasetRepository datasets;
     @Autowired private EvaluationRunRepository runs;
@@ -38,6 +41,7 @@ class EvaluationBaselineControllerIntegrationTest {
         EvaluationRun run = run(dataset, "PASSED", 0, 0, 0);
 
         mvc.perform(post("/api/evaluation/runs/{id}/promote-baseline", run.getId())
+                        .header("Authorization", EVALUATOR_TOKEN)
                         .contentType("application/json")
                         .content("{\"promotedBy\":\"manual-acceptance\"}"))
                 .andExpect(status().isOk())
@@ -60,6 +64,11 @@ class EvaluationBaselineControllerIntegrationTest {
                 });
 
         mvc.perform(get("/api/evaluation/datasets/{id}/baseline", dataset.getId()))
+                .andDo(result -> {})
+                .andExpect(status().isUnauthorized());
+
+        mvc.perform(get("/api/evaluation/datasets/{id}/baseline", dataset.getId())
+                        .header("Authorization", EVALUATOR_TOKEN))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.baselineId").isNumber())
                 .andExpect(jsonPath("$.data.datasetId").value(dataset.getId()))
@@ -75,6 +84,7 @@ class EvaluationBaselineControllerIntegrationTest {
         EvaluationRun run = run(dataset, "FAILED", 1, 0, 0);
 
         mvc.perform(post("/api/evaluation/runs/{id}/promote-baseline", run.getId())
+                        .header("Authorization", EVALUATOR_TOKEN)
                         .contentType("application/json")
                         .content("{\"promotedBy\":\"manual-acceptance\"}"))
                 .andExpect(status().isBadRequest())

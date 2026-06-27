@@ -1,6 +1,7 @@
 package travelcare_agent.api;
 
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.core.env.Environment;
 import travelcare_agent.answerability.AnswerabilityDecision;
 import travelcare_agent.answerability.AnswerabilityRequest;
@@ -40,6 +41,7 @@ public class KnowledgeController {
     }
 
     @PostMapping("/documents")
+    @PreAuthorize("hasRole('ADMIN')")
     public Result<KnowledgeDocument> ingestDocument(@RequestBody IngestDocumentRequest request) {
         KnowledgeDocument document = ingestionService.ingest(
                 request.title(),
@@ -53,6 +55,7 @@ public class KnowledgeController {
     }
 
     @GetMapping("/search")
+    @PreAuthorize("hasAnyRole('USER','OPERATOR','EVALUATOR','ADMIN')")
     public Result<List<RetrievalSnippet>> searchKnowledge(@RequestParam String query) {
         List<RetrievalSnippet> snippets = retrievalService.retrieve(
                 new RetrievalQuery(null, null, query, null, 5)
@@ -61,6 +64,7 @@ public class KnowledgeController {
     }
 
     @PostMapping("/answerability/check")
+    @PreAuthorize("hasRole('ADMIN')")
     public Result<AnswerabilityCheckResponse> checkAnswerability(@RequestBody AnswerabilityCheckRequest request) {
         requireDebugProfile();
         int limit = request.limit() == null || request.limit() <= 0 ? 5 : request.limit();

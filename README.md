@@ -1,5 +1,59 @@
 # TravelCare-Agent
 
+## Production Readiness Phase 1
+
+TravelCare-Agent 已完成 RC 验收，当前进入 **Production Readiness Phase 1**，阶段名称为
+**PR-1: Security, Reliability, Observability Hardening**。当前已完成 **PR-1A Security Boundary**。
+
+PR-1A 的目标是准生产可信后端硬化第一步：建立认证、授权、角色边界、对象级权限和基础脱敏能力。
+这不是 Stage 11，也不是继续堆 AI 功能；本阶段不接入 Spring AI、LangGraph、MCP Tool Store、
+多 Agent 平台、管理后台、微服务或 Kubernetes。
+
+### PR-1A 认证方式
+
+- 核心 `/api/**` 默认需要 `Authorization: Bearer <jwt>`。
+- 未认证或非法 token 返回 `401`。
+- 已认证但角色或对象权限不足返回 `403`。
+- `GET /health` 和 `GET /actuator/health` 公开。
+- Swagger、`doc.html`、`/v3/api-docs/**` 仅在 `local/dev/test` profile 下公开。
+- `/api/dev/auth/token` 默认关闭；仅在 `local/dev/test` profile 且显式设置
+  `travelcare.security.dev-auth-enabled=true` 时注册。
+- 生产环境如果缺失 JWT secret、使用默认 secret，或 secret 短于 32 字节，应用启动失败。
+
+开发 token 示例：
+
+```http
+POST /api/dev/auth/token
+Content-Type: application/json
+
+{"userId":1001,"tenantId":"default","roles":["USER"]}
+```
+
+### PR-1A 角色边界
+
+| API surface | USER | OPERATOR | EVALUATOR | ADMIN |
+| --- | --- | --- | --- | --- |
+| Session / Message | 仅本人和本租户 | 否 | 否 | 全部 |
+| Workflow | 仅本人 session 关联 | 人工处理相关 | 否 | 全部 |
+| Memory | 仅本人 | 否 | 否 | 全部 |
+| Trace / Dry Run / Diff | 否 | 否 | 否 | 是 |
+| Evaluation | 否 | 否 | 是 | 是 |
+| Human Review | 否 | 是 | 否 | 是 |
+| Audit | future protected surface | future protected surface | future protected surface | future protected surface |
+| Order REST API | 当前不存在；订单归属通过 message/workflow/tool 闭环校验 | 当前不存在 | 当前不存在 | 当前不存在 |
+
+### PR-1A 测试
+
+```powershell
+docker compose -f travelcare_dev/docker-compose.yaml up -d
+.\mvnw.cmd test
+```
+
+Surefire 固定 `travelcare.agent.provider=mock`，测试不得调用 DeepSeek 或真实 LLM Provider。
+安全测试使用 `SecurityTestTokenFactory` 生成 JWT，不在 test profile 下关闭 Spring Security。
+
+详细设计见 [`docs/pr1/security-boundary.md`](docs/pr1/security-boundary.md)。
+
 > 旅游退款客服场景下的受控式 AI Agent 后端。
 
 ## 项目定位
@@ -300,7 +354,7 @@ Exit code: 0
 
 ## Release Candidate 状态
 
-Stage 10 已完成，当前功能已经不建议继续横向堆 Stage，也不建议开启 Stage 11。下一步目标是 RC 总体验收，包括 CI、空库 Flyway、Compose healthcheck、五分钟 Demo、已知限制和展示证据。
+Stage 10 已完成，当前功能已经不建议继续横向堆 Stage，也不再开启新的 Stage 编号。下一步目标是 RC 总体验收，包括 CI、空库 Flyway、Compose healthcheck、五分钟 Demo、已知限制和展示证据。
 
 RC 收口文档：
 

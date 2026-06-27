@@ -36,6 +36,11 @@
         </dependency>
 
         <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
             <version>3.5.15</version>
@@ -94,6 +99,7 @@
                 <configuration>
                     <systemPropertyVariables>
                         <travelcare.agent.provider>mock</travelcare.agent.provider>
+                        <travelcare.jwt.secret>test-jwt-secret-with-at-least-32-bytes</travelcare.jwt.secret>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

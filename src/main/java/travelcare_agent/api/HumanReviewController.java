@@ -1,6 +1,7 @@
 package travelcare_agent.api;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.Result;
@@ -12,6 +13,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/human-review/cases")
+@PreAuthorize("hasAnyRole('OPERATOR','ADMIN')")
 public class HumanReviewController {
 
     private final HumanReviewService humanReviewService;

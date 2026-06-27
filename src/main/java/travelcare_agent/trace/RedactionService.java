@@ -17,12 +17,17 @@ import java.util.regex.Pattern;
 public class RedactionService {
     private static final String MASK = "[REDACTED]";
     private static final Set<String> SENSITIVE_KEYS = Set.of(
-            "phone", "email", "idcard", "token", "password", "secret", "apikey", "authorization", "cookie"
+            "phone", "email", "idcard", "id_card", "token", "accesstoken", "access_token",
+            "refreshtoken", "refresh_token", "password", "secret", "providersecret",
+            "provider_secret", "apikey", "api_key", "authorization", "cookie"
     );
     private static final Pattern EMAIL = Pattern.compile("(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}");
     private static final Pattern PHONE = Pattern.compile("(?<!\\d)1[3-9]\\d{9}(?!\\d)");
     private static final Pattern ID_CARD = Pattern.compile("(?<!\\d)\\d{17}[0-9Xx](?!\\w)");
     private static final Pattern BEARER = Pattern.compile("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*");
+    private static final Pattern JWT = Pattern.compile("eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+");
+    private static final Pattern KEY_VALUE_SECRET = Pattern.compile("(?i)(api[_-]?key|provider[_-]?secret|secret|token)\\s*[:=]\\s*[^\\s,;\\\"}]+");
+    private static final Pattern STACK_FRAME = Pattern.compile("at\\s+[\\w.$_]+\\([^\\n\\r\\\\]*\\.java:\\d+\\)");
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     public RedactionResult redact(String value) {
@@ -61,6 +66,9 @@ public class RedactionService {
     private RedactionResult redactText(String input, AtomicInteger initial) {
         String value = input;
         value = replace(value, BEARER, initial);
+        value = replace(value, JWT, initial);
+        value = replace(value, KEY_VALUE_SECRET, initial);
+        value = replace(value, STACK_FRAME, initial);
         value = replace(value, EMAIL, initial);
         value = replace(value, PHONE, initial);
         value = replace(value, ID_CARD, initial);

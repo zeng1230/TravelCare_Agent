@@ -80,6 +80,29 @@ class ToolServiceTest {
     }
 
     @Test
+    void rejectsOrderOwnedByAnotherUserWithoutSuccessfulToolResult() {
+        Fixture fixture = Fixture.withOrder(new MockOrderAdapter.OrderSnapshot(
+                10L,
+                "ORD-10",
+                2002L,
+                OrderStatus.PAID,
+                true,
+                new BigDecimal("399.00"),
+                LocalDateTime.parse("2026-05-10T10:00:00")
+        ));
+
+        assertThatThrownBy(() -> fixture.getOrderTool.execute(request("tool:get_order:20:foreign", 10L, null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting("resultCode")
+                .isEqualTo(ResultCode.ORDER_NOT_FOUND);
+
+        ToolCall toolCall = fixture.toolCallRepository.only();
+        assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
+        assertThat(toolCall.getResponseJson()).contains("ORDER_NOT_FOUND");
+        assertThat(toolCall.getResponseJson()).doesNotContain("SUCCESS");
+    }
+
+    @Test
     void recordsUnknownWhenAdapterThrowsUnexpectedException() {
         Fixture fixture = Fixture.withFailingAdapter();
 

@@ -1,6 +1,8 @@
 package travelcare_agent.api;
 
 import org.springframework.web.bind.annotation.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.Result;
 import travelcare_agent.common.result.ResultCode;
@@ -14,6 +16,7 @@ import travelcare_agent.workflow.entity.WorkflowTask;
 import travelcare_agent.workflow.repository.WorkflowRepository;
 import travelcare_agent.workflow.repository.WorkflowStepRepository;
 import travelcare_agent.workflow.repository.WorkflowTaskRepository;
+import travelcare_agent.security.AuthorizationService;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -27,6 +30,24 @@ public class WorkflowController {
     private final WorkflowTaskRepository taskRepository;
     private final RefundCaseRepository refundCaseRepository;
     private final HumanReviewCaseRepository hrCaseRepository;
+    private final AuthorizationService authorizationService;
+
+    @Autowired
+    public WorkflowController(
+            WorkflowRepository workflowRepository,
+            WorkflowStepRepository stepRepository,
+            WorkflowTaskRepository taskRepository,
+            RefundCaseRepository refundCaseRepository,
+            HumanReviewCaseRepository hrCaseRepository,
+            AuthorizationService authorizationService
+    ) {
+        this.workflowRepository = workflowRepository;
+        this.stepRepository = stepRepository;
+        this.taskRepository = taskRepository;
+        this.refundCaseRepository = refundCaseRepository;
+        this.hrCaseRepository = hrCaseRepository;
+        this.authorizationService = authorizationService;
+    }
 
     public WorkflowController(
             WorkflowRepository workflowRepository,
@@ -35,22 +56,26 @@ public class WorkflowController {
             RefundCaseRepository refundCaseRepository,
             HumanReviewCaseRepository hrCaseRepository
     ) {
-        this.workflowRepository = workflowRepository;
-        this.stepRepository = stepRepository;
-        this.taskRepository = taskRepository;
-        this.refundCaseRepository = refundCaseRepository;
-        this.hrCaseRepository = hrCaseRepository;
+        this(workflowRepository, stepRepository, taskRepository, refundCaseRepository, hrCaseRepository, null);
     }
 
     @GetMapping("/workflows/{workflowId}")
+    @PreAuthorize("hasAnyRole('USER','OPERATOR','ADMIN')")
     public Result<WorkflowDetailResponse> getWorkflowDetail(@PathVariable Long workflowId) {
+        if (authorizationService != null) {
+            authorizationService.requireWorkflowAccess(workflowId);
+        }
         Workflow workflow = workflowRepository.findById(workflowId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Workflow not found: " + workflowId));
         return Result.success(buildDetailResponse(workflow));
     }
 
     @GetMapping("/workflows/{workflowId}/steps")
+    @PreAuthorize("hasAnyRole('USER','OPERATOR','ADMIN')")
     public Result<List<WorkflowStepResponse>> getWorkflowSteps(@PathVariable Long workflowId) {
+        if (authorizationService != null) {
+            authorizationService.requireWorkflowAccess(workflowId);
+        }
         // First verify that the workflow exists (throws 404 if not found)
         workflowRepository.findById(workflowId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Workflow not found: " + workflowId));
@@ -63,7 +88,11 @@ public class WorkflowController {
     }
 
     @GetMapping("/sessions/{sessionId}/workflows")
+    @PreAuthorize("hasAnyRole('USER','OPERATOR','ADMIN')")
     public Result<List<WorkflowDetailResponse>> getSessionWorkflows(@PathVariable Long sessionId) {
+        if (authorizationService != null) {
+            authorizationService.requireSessionAccess(sessionId);
+        }
         List<Workflow> workflows = workflowRepository.findBySessionId(sessionId);
         List<WorkflowDetailResponse> responses = workflows.stream()
                 .map(this::buildDetailResponse)

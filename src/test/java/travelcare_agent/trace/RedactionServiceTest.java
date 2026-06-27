@@ -25,4 +25,18 @@ class RedactionServiceTest {
         assertThat(result.value()).contains("[REDACTED]");
         assertThat(result.redactedCount()).isGreaterThanOrEqualTo(13);
     }
+
+    @Test
+    void redactsJwtSecretsAndStackTraceText() {
+        String jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMDAxIn0.signature";
+        String input = "{\"providerSecret\":\"deepseek-secret\",\"api_key\":\"raw-key\","
+                + "\"message\":\"Authorization: Bearer " + jwt + "\\n"
+                + "java.lang.IllegalStateException: provider raw failure\\n"
+                + "\\tat travelcare_agent.agent.Provider.call(Provider.java:42)\"}";
+
+        RedactionService.RedactionResult result = service.redact(input);
+
+        assertThat(result.value()).doesNotContain("deepseek-secret", "raw-key", jwt, "Provider.java:42");
+        assertThat(result.value()).contains("[REDACTED]");
+    }
 }
