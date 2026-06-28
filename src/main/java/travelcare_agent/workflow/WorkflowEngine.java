@@ -8,6 +8,9 @@ import travelcare_agent.workflow.entity.WorkflowStep;
 import travelcare_agent.workflow.repository.WorkflowRepository;
 import travelcare_agent.workflow.repository.WorkflowStepRepository;
 import travelcare_agent.trace.*;
+import travelcare_agent.observability.TravelCareMetrics;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 
 @Service
@@ -17,21 +20,24 @@ public class WorkflowEngine {
     private final WorkflowStepRepository stepRepository;
     private final WorkflowRegistry registry;
     private final TraceService traceService;
+    private final TravelCareMetrics metrics;
 
     @org.springframework.beans.factory.annotation.Autowired
     public WorkflowEngine(
             WorkflowRepository workflowRepository,
             WorkflowStepRepository stepRepository,
             WorkflowRegistry registry,
-            TraceService traceService
+            TraceService traceService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) TravelCareMetrics metrics
     ) {
         this.workflowRepository = workflowRepository;
         this.stepRepository = stepRepository;
         this.registry = registry;
         this.traceService = traceService;
+        this.metrics = metrics;
     }
     public WorkflowEngine(WorkflowRepository workflowRepository, WorkflowStepRepository stepRepository, WorkflowRegistry registry) {
-        this(workflowRepository, stepRepository, registry, null);
+        this(workflowRepository, stepRepository, registry, null, null);
     }
 
     @Transactional
@@ -54,6 +60,8 @@ public class WorkflowEngine {
     }
 
     private WorkflowResult executeTraced(String workflowType, WorkflowCommand command, Workflow workflow) {
+        Instant startedAt = Instant.now();
+        if (metrics != null) metrics.workflowStarted(workflowType, workflow.getCurrentStep());
         TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
                 : traceService.startSpan(SpanType.WORKFLOW, workflowType, Map.of("workflowId", workflow.getId()));
         try (TraceContextHolder.Scope ignored = span.available() ? TraceContextHolder.attach(span.traceId(), span.spanId()) : null) {
@@ -70,10 +78,24 @@ public class WorkflowEngine {
                             )).toList()
                     ));
             if (traceService != null) traceService.finishSpanSuccess(span, "WORKFLOW:" + workflow.getId(), Map.of("status", result.workflow().getStatus().name()));
+            recordWorkflowMetric(workflowType, result.workflow(), Duration.between(startedAt, Instant.now()));
             return result;
         } catch (RuntimeException ex) {
             if (traceService != null) traceService.finishSpanFailure(span, "WORKFLOW_FAILED", ex, Map.of());
+            if (metrics != null) metrics.workflowFailed(workflowType, workflow.getCurrentStep(), "WORKFLOW_FAILED",
+                    Duration.between(startedAt, Instant.now()));
             throw ex;
+        }
+    }
+
+    private void recordWorkflowMetric(String workflowType, Workflow workflow, Duration duration) {
+        if (metrics == null || workflow.getStatus() == null) return;
+        if (workflow.getStatus() == WorkflowStatus.NEED_HUMAN) {
+            metrics.workflowNeedHuman(workflowType, workflow.getCurrentStep(), "NEED_HUMAN", duration);
+        } else if (workflow.getStatus() == WorkflowStatus.FAILED) {
+            metrics.workflowFailed(workflowType, workflow.getCurrentStep(), "WORKFLOW_FAILED", duration);
+        } else {
+            metrics.workflowCompleted(workflowType, workflow.getStatus().name(), workflow.getCurrentStep(), duration);
         }
     }
 

@@ -48,3 +48,16 @@ knife4j:
 logging:
   pattern:
     console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] [%X{traceId:-}] %logger{36} - %msg%n"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include:
+          - health
+          - metrics
+  endpoint:
+    health:
+      probes:
+        enabled: false
+      show-details: never

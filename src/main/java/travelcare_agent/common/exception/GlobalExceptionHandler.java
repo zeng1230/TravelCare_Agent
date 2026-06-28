@@ -11,11 +11,21 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import travelcare_agent.common.result.Result;
 import travelcare_agent.common.result.ResultCode;
+import travelcare_agent.trace.RedactionService;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private final RedactionService redactionService;
+
+    public GlobalExceptionHandler(RedactionService redactionService) {
+        this.redactionService = redactionService;
+    }
+
+    public GlobalExceptionHandler() {
+        this(new RedactionService());
+    }
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Result<Void>> handleBusinessException(BusinessException ex) {
@@ -46,7 +56,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Result<Void>> handleException(Exception ex) {
-        log.error("Unhandled request exception type={} message={}", ex.getClass().getSimpleName(), sanitize(ex.getMessage()));
+        log.error("Unhandled request exception type={} errorCode={} message={}",
+                ex.getClass().getSimpleName(), ResultCode.INTERNAL_ERROR.code(), sanitize(ex.getMessage()));
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Result.fail(ResultCode.INTERNAL_ERROR));
     }
@@ -70,7 +81,7 @@ public class GlobalExceptionHandler {
         if (message == null) {
             return "";
         }
-        return message.replaceAll("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*", "[REDACTED]")
-                .replaceAll("(?i)(api[_-]?key|secret|token)=\\S+", "$1=[REDACTED]");
+        String redacted = redactionService.redact(message).value();
+        return redacted.length() > 256 ? redacted.substring(0, 256) : redacted;
     }
 }

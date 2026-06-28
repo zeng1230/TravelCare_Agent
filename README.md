@@ -1,13 +1,16 @@
 # TravelCare-Agent
 
-## PR-1B Async Reliability Boundary
+## PR-1C Observability and Runtime Diagnostics Boundary
 
 - PR-1A Security Boundary is complete. Spring Security remains enabled and PR-1A 401/403 behavior must continue to pass.
-- Current work is **PR-1B Async Reliability Boundary**, not Stage 11.
-- PR-1B is reliability hardening for RabbitMQ, Worker, Tool Call, Workflow, Outbox, DLQ, retry, timeout, and reconciliation. It is not a new AI feature phase.
+- PR-1B Async Reliability Boundary is complete. Outbox, Worker, retry, DLQ, and Reconciliation semantics must continue to pass.
+- Current work is **PR-1C Observability and Runtime Diagnostics Boundary**, not Stage 11.
+- PR-1C is runtime observability hardening for metrics, structured logs, traceId propagation, and diagnostics permission boundaries. It is not a new AI feature phase.
 - Tests remain fixed to `travelcare.agent.provider=mock`; they must not call DeepSeek or any real LLM provider.
-- PR-1B adds Outbox Lite with `payload_version=v1`, publisher confirm handling, stale `PUBLISHING` recovery, dedupe keys, database-driven delayed retry, sanitized DLQ messages, and mock reconciliation for eligible UNKNOWN side-effecting calls.
-- Design document: [`docs/pr1/async-reliability-boundary.md`](docs/pr1/async-reliability-boundary.md).
+- Actuator exposure is intentionally small: `GET /actuator/health` is public with no details, while `GET /actuator/metrics` and `GET /actuator/metrics/{meterName}` require ADMIN. Sensitive endpoints such as env, beans, and configprops are not exposed.
+- Metrics use stable low-cardinality tags only. Counter names end with `.total`; timer names keep `duration` or `latency`, with units decided by the Micrometer registry. Metric tags must not contain user/session/order/trace IDs, prompts, tokens, secrets, raw errors, or dynamic model/deployment IDs.
+- Structured logs include `traceId` through MDC and use redacted, bounded business messages. Raw prompts, provider raw responses, authorization headers, JWTs, API keys, and secrets are not business-log fields.
+- Design document: [`docs/pr1/observability-runtime-diagnostics.md`](docs/pr1/observability-runtime-diagnostics.md).
 
 Test command:
 
@@ -427,7 +430,7 @@ GET /api/agent-traces/{traceId}/diffs/{dryRunTraceId}
 - 没有真实供应商订单系统；订单数据来自 `MockOrderAdapter`。
 - 没有完整认证授权。
 - 没有完整 Outbox、Publisher Confirm、DLQ。
-- 没有 OpenTelemetry、Actuator、Metrics、Alerting。
+- 没有完整 OpenTelemetry 平台、Prometheus/Grafana 强依赖或 Alerting 平台；PR-1C 仅提供 Observability Lite 的 Actuator health/metrics、Micrometer 指标、structured logs 和 traceId 边界。
 - Human Review 是后端复核 Case，不是完整坐席系统。
 - DeepSeek Adapter 已实现，但真实网络、限流、费用、SLA 和供应商错误契约未完成生产验证。
 - RAG 使用 MySQL FULLTEXT/LIKE，不是向量检索；没有 embedding、reranker 或大规模知识同步。

@@ -2,13 +2,22 @@ package travelcare_agent.reconciliation;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import travelcare_agent.observability.TravelCareMetrics;
 
 @Service
 public class ReconciliationService {
     private final ReconciliationJobRepository repository;
+    private final TravelCareMetrics metrics;
+
+    public ReconciliationService(ReconciliationJobRepository repository,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) TravelCareMetrics metrics) {
+        this.repository = repository;
+        this.metrics = metrics;
+        if (metrics != null) metrics.gauge("travelcare.reconciliation.pending", repository::countPending);
+    }
 
     public ReconciliationService(ReconciliationJobRepository repository) {
-        this.repository = repository;
+        this(repository, null);
     }
 
     @Transactional
@@ -20,7 +29,9 @@ public class ReconciliationService {
             job.setReasonCode(reasonCode);
             job.setTraceId(traceId);
             job.setStatus(ReconciliationJobStatus.PENDING);
-            return repository.save(job);
+            ReconciliationJob saved = repository.save(job);
+            if (metrics != null) metrics.reconciliationCreated(saved.getSourceType(), saved.getReasonCode());
+            return saved;
         });
     }
 
@@ -32,6 +43,8 @@ public class ReconciliationService {
         ReconciliationJob job = repository.findById(jobId).orElseThrow();
         job.setStatus(status);
         job.setResultCode(resultCode);
-        return repository.save(job);
+        ReconciliationJob saved = repository.save(job);
+        if (metrics != null) metrics.reconciliationResolved(saved.getSourceType(), saved.getStatus().name(), resultCode);
+        return saved;
     }
 }

@@ -40,6 +40,8 @@ public class SecurityConfig {
                         .accessDeniedHandler((request, response, accessDeniedException) -> write(response, 403, "FORBIDDEN")))
                 .authorizeHttpRequests(auth -> {
                     auth.requestMatchers(HttpMethod.GET, "/health", "/actuator/health").permitAll();
+                    auth.requestMatchers(HttpMethod.GET, "/actuator/metrics", "/actuator/metrics/**")
+                            .hasRole("ADMIN");
                     if (localLike) {
                         auth.requestMatchers(
                                 "/api/dev/auth/token",

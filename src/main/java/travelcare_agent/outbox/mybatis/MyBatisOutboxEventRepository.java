@@ -70,4 +70,11 @@ public class MyBatisOutboxEventRepository implements OutboxEventRepository {
                 .eq(OutboxEvent::getStatus, OutboxEventStatus.PUBLISHING)
                 .lt(OutboxEvent::getUpdatedAt, before));
     }
+
+    @Override
+    public long countBacklog() {
+        return mapper.selectCount(new LambdaQueryWrapper<OutboxEvent>()
+                .in(OutboxEvent::getStatus, OutboxEventStatus.NEW,
+                        OutboxEventStatus.RETRYING, OutboxEventStatus.PUBLISHING));
+    }
 }

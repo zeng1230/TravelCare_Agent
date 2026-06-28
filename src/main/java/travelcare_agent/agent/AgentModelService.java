@@ -3,6 +3,8 @@ package travelcare_agent.agent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import travelcare_agent.agent.prompt.PromptTemplateService;
 import travelcare_agent.agent.provider.AgentProviderProperties;
@@ -28,6 +30,7 @@ import travelcare_agent.trace.TraceContextHolder;
 import travelcare_agent.trace.TraceEventType;
 import travelcare_agent.trace.TraceService;
 import travelcare_agent.trace.TraceSnapshotType;
+import travelcare_agent.observability.TravelCareMetrics;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -39,6 +42,7 @@ import java.util.Set;
 
 @Service
 public class AgentModelService {
+    private static final Logger log = LoggerFactory.getLogger(AgentModelService.class);
 
     private final ChatModelProvider primaryProvider;
     private final MockChatModelProvider fallbackProvider;
@@ -49,6 +53,7 @@ public class AgentModelService {
     private final TraceService traceService;
     private final StructuredModelOutputParser outputParser;
     private final ModelSafetyGate safetyGate;
+    private final TravelCareMetrics metrics;
 
     @Autowired
     public AgentModelService(
@@ -60,7 +65,8 @@ public class AgentModelService {
             ObjectMapper objectMapper,
             TraceService traceService,
             StructuredModelOutputParser outputParser,
-            ModelSafetyGate safetyGate
+            ModelSafetyGate safetyGate,
+            @Autowired(required = false) TravelCareMetrics metrics
     ) {
         this.primaryProvider = primaryProvider;
         this.fallbackProvider = fallbackProvider;
@@ -71,6 +77,7 @@ public class AgentModelService {
         this.traceService = traceService;
         this.outputParser = outputParser;
         this.safetyGate = safetyGate;
+        this.metrics = metrics;
     }
 
     public AgentModelService(
@@ -82,7 +89,7 @@ public class AgentModelService {
     ) {
         this(primaryProvider, fallbackProvider, new AgentProviderProperties(), promptTemplateService,
                 agentRunService, objectMapper, null,
-                new StructuredModelOutputParser(objectMapper), new ModelSafetyGate());
+                new StructuredModelOutputParser(objectMapper), new ModelSafetyGate(), null);
     }
 
     public AgentModelService(
@@ -95,7 +102,22 @@ public class AgentModelService {
             TraceService traceService
     ) {
         this(primaryProvider, fallbackProvider, properties, promptTemplateService, agentRunService, objectMapper,
-                traceService, new StructuredModelOutputParser(objectMapper), new ModelSafetyGate());
+                traceService, new StructuredModelOutputParser(objectMapper), new ModelSafetyGate(), null);
+    }
+
+    public AgentModelService(
+            ChatModelProvider primaryProvider,
+            MockChatModelProvider fallbackProvider,
+            AgentProviderProperties properties,
+            PromptTemplateService promptTemplateService,
+            AgentRunService agentRunService,
+            ObjectMapper objectMapper,
+            TraceService traceService,
+            StructuredModelOutputParser outputParser,
+            ModelSafetyGate safetyGate
+    ) {
+        this(primaryProvider, fallbackProvider, properties, promptTemplateService, agentRunService, objectMapper,
+                traceService, outputParser, safetyGate, null);
     }
 
     public MockIntentClassifier.IntentResult classifyIntentAndExtractSlots(
@@ -242,6 +264,7 @@ public class AgentModelService {
         }
 
         ModelSafetyDecision decision = safetyGate.evaluate(primary.parsed(), safetyContext);
+        recordSafetyMetric(decision);
         recordSafetyTrace(operation, decision);
         complete(run, startedAt, primary.parsed(), UsageTotals.from(primary.response().usage()), false,
                 "SUCCESS", null, null, null, null, "SUCCESS", decision);
@@ -273,6 +296,9 @@ public class AgentModelService {
                         travelcare_agent.agent.safety.ModelSafetyDecisionType.FALLBACK,
                         "OUTPUT_CONTRACT_FALLBACK", List.of(), decision.safeAnswer());
             }
+            if (metrics != null) metrics.llmFallback(primaryFailure.providerName, model(primaryFailure.response),
+                    providerMode(), primaryFailure.error.code());
+            recordSafetyMetric(decision);
             recordSafetyTrace(operation, decision);
             complete(run, startedAt, fallback.parsed(), totals, true, "FALLBACK_SUCCESS",
                     primaryFailure.error.code(), safePrimaryFailure(primaryFailure.error.code()),
@@ -295,6 +321,8 @@ public class AgentModelService {
             String promptVersion,
             boolean fallback
     ) {
+        Instant startedAt = Instant.now();
+        if (metrics != null) metrics.llmRequest(provider.providerName(), request.model(), providerMode());
         TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
                 : traceService.startSpan(fallback ? SpanType.FALLBACK : SpanType.MODEL,
                 operation, Map.of("provider", provider.providerName(), "promptVersion", promptVersion));
@@ -311,21 +339,44 @@ public class AgentModelService {
                         "provider", provider.providerName(), "model", safeValue(response.model()),
                         "promptVersion", promptVersion));
             }
+            if (metrics != null) metrics.llmSuccess(provider.providerName(), response.model(), providerMode(),
+                    "PARSED", Duration.between(startedAt, Instant.now()),
+                    usage(response) == null ? null : usage(response).inputTokens(),
+                    usage(response) == null ? null : usage(response).outputTokens());
+            log.info("llm event=result_success provider={} model={} mode={} operation={}",
+                    provider.providerName(), TravelCareMetrics.normalizeModel(response.model()), providerMode(), operation);
             return new AttemptResult(parsed, response);
         } catch (ModelOutputParseException ex) {
             ModelCallException mapped = new ModelCallException(
                     "MODEL_INVALID_RESPONSE", "Model response did not match the structured contract", ex);
             finishAttemptFailure(span, provider, mapped);
-            throw new AttemptFailure(mapped, response);
+            recordAttemptFailureMetric(provider, request, response, mapped, startedAt);
+            throw new AttemptFailure(mapped, response, provider.providerName());
         } catch (ModelCallException ex) {
             finishAttemptFailure(span, provider, ex);
-            throw new AttemptFailure(ex, response);
+            recordAttemptFailureMetric(provider, request, response, ex, startedAt);
+            throw new AttemptFailure(ex, response, provider.providerName());
         } catch (RuntimeException ex) {
             ModelCallException mapped = new ModelCallException(
                     "MODEL_PROVIDER_FAILED", "Model provider failed", ex);
             finishAttemptFailure(span, provider, mapped);
-            throw new AttemptFailure(mapped, response);
+            recordAttemptFailureMetric(provider, request, response, mapped, startedAt);
+            throw new AttemptFailure(mapped, response, provider.providerName());
         }
+    }
+
+    private void recordAttemptFailureMetric(ChatModelProvider provider, ModelRequest request, ModelResponse response,
+            ModelCallException error, Instant startedAt) {
+        if (metrics != null) {
+            ModelUsage usage = usage(response);
+            metrics.llmFailure(provider.providerName(), model(response) == null ? request.model() : model(response),
+                    providerMode(), error.code(), Duration.between(startedAt, Instant.now()),
+                    usage == null ? null : usage.inputTokens(),
+                    usage == null ? null : usage.outputTokens());
+        }
+        log.warn("llm event=result_failure provider={} model={} mode={} failureCode={}",
+                provider.providerName(), TravelCareMetrics.normalizeModel(model(response) == null ? request.model() : model(response)),
+                providerMode(), safeCode(error.code()));
     }
 
     private void complete(
@@ -404,6 +455,15 @@ public class AgentModelService {
         }
     }
 
+    private void recordSafetyMetric(ModelSafetyDecision decision) {
+        if (metrics == null || decision == null) return;
+        metrics.safetyDecision(decision.type().name(), decision.reasonCode(), providerMode());
+        if (decision.type() == travelcare_agent.agent.safety.ModelSafetyDecisionType.BLOCK) {
+            metrics.llmSafetyBlock(primaryProvider.providerName(), properties.getModel(), providerMode(),
+                    decision.type().name(), decision.reasonCode());
+        }
+    }
+
     private void finishAttemptFailure(
             TraceService.SpanHandle span,
             ChatModelProvider provider,
@@ -463,11 +523,13 @@ public class AgentModelService {
     private static final class AttemptFailure extends RuntimeException {
         private final ModelCallException error;
         private final ModelResponse response;
+        private final String providerName;
 
-        private AttemptFailure(ModelCallException error, ModelResponse response) {
+        private AttemptFailure(ModelCallException error, ModelResponse response, String providerName) {
             super(error);
             this.error = error;
             this.response = response;
+            this.providerName = providerName == null ? "unknown" : providerName;
         }
     }
 

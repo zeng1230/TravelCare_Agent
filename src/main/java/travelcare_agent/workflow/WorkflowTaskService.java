@@ -7,6 +7,7 @@ import travelcare_agent.config.RabbitMqConfig;
 import travelcare_agent.enums.WorkflowTaskStatus;
 import travelcare_agent.outbox.OutboxEvent;
 import travelcare_agent.outbox.OutboxEventService;
+import travelcare_agent.observability.TravelCareMetrics;
 import travelcare_agent.workflow.entity.WorkflowTask;
 import travelcare_agent.workflow.event.TaskCreatedEvent;
 import travelcare_agent.workflow.repository.WorkflowTaskRepository;
@@ -20,19 +21,22 @@ public class WorkflowTaskService {
     private final WorkflowTaskRepository repository;
     private final ApplicationEventPublisher eventPublisher;
     private final OutboxEventService outboxEventService;
+    private final TravelCareMetrics metrics;
 
     public WorkflowTaskService(WorkflowTaskRepository repository, ApplicationEventPublisher eventPublisher) {
-        this(repository, eventPublisher, null);
+        this(repository, eventPublisher, null, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public WorkflowTaskService(
             WorkflowTaskRepository repository,
             ApplicationEventPublisher eventPublisher,
-            @org.springframework.beans.factory.annotation.Autowired(required = false) OutboxEventService outboxEventService) {
+            @org.springframework.beans.factory.annotation.Autowired(required = false) OutboxEventService outboxEventService,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) TravelCareMetrics metrics) {
         this.repository = repository;
         this.eventPublisher = eventPublisher;
         this.outboxEventService = outboxEventService;
+        this.metrics = metrics;
     }
 
     @Transactional
@@ -86,7 +90,9 @@ public class WorkflowTaskService {
         WorkflowTask task = repository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
         task.setLastSkippedReason(safeCode(skippedReason));
-        return repository.save(task);
+        WorkflowTask saved = repository.save(task);
+        if (metrics != null) metrics.workerSkipped(saved.getTaskType(), saved.getLastSkippedReason());
+        return saved;
     }
 
     @Transactional
@@ -104,11 +110,13 @@ public class WorkflowTaskService {
             task.setDeadLetterReason("MAX_ATTEMPTS_REACHED");
             WorkflowTask saved = repository.save(task);
             createDeadLetterOutbox(saved, traceId, safeCode(errorCode), attempts, "MAX_ATTEMPTS_REACHED");
+            if (metrics != null) metrics.workerDeadLettered(saved.getTaskType(), safeCode(errorCode));
             return saved;
         }
         task.setNextRunAt(nextRunAt);
         WorkflowTask saved = repository.save(task);
         createDispatchOutbox(saved, traceId, null, attempts, nextRunAt);
+        if (metrics != null) metrics.workerRetryScheduled(saved.getTaskType(), safeCode(errorCode));
         return saved;
     }
 
@@ -123,7 +131,17 @@ public class WorkflowTaskService {
         WorkflowTask task = repository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
         task.setStatus(terminalStatus);
-        return repository.save(task);
+        WorkflowTask saved = repository.save(task);
+        if (metrics != null) {
+            if (terminalStatus == WorkflowTaskStatus.SUCCEEDED) {
+                metrics.workerSucceeded(saved.getTaskType());
+            } else if (terminalStatus == WorkflowTaskStatus.FAILED) {
+                metrics.workerFailed(saved.getTaskType(), safeCode(saved.getLastErrorCode()));
+            } else if (terminalStatus == WorkflowTaskStatus.NEED_HUMAN) {
+                metrics.workerSkipped(saved.getTaskType(), "NEED_HUMAN");
+            }
+        }
+        return saved;
     }
 
     private void createDispatchOutbox(WorkflowTask task, String traceId, String parentSpanId, int attempts,

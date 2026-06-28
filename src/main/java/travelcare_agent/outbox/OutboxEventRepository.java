@@ -11,4 +11,5 @@ public interface OutboxEventRepository {
     List<OutboxEvent> findDueEvents(LocalDateTime now, int limit);
     boolean claimForPublishing(Long id, LocalDateTime now);
     List<OutboxEvent> findStalePublishing(LocalDateTime before);
+    default long countBacklog() { return 0; }
 }

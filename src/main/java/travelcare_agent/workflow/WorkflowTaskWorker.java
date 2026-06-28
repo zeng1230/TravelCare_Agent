@@ -23,6 +23,7 @@ import travelcare_agent.enums.SessionEventRole;
 import travelcare_agent.enums.WorkflowTaskStatus;
 import travelcare_agent.workflow.entity.WorkflowTask;
 import travelcare_agent.workflow.repository.WorkflowTaskRepository;
+import travelcare_agent.observability.TravelCareMetrics;
 
 import travelcare_agent.agent.ContextAssembler;
 import travelcare_agent.agent.AgentContext;
@@ -61,6 +62,7 @@ public class WorkflowTaskWorker {
     private final AgentRunService agentRunService;
     private final AgentModelService agentModelService;
     private final TraceService traceService;
+    private final TravelCareMetrics metrics;
 
     @Autowired
     public WorkflowTaskWorker(
@@ -79,7 +81,8 @@ public class WorkflowTaskWorker {
             ContextAssembler contextAssembler,
             AgentRunService agentRunService,
             AgentModelService agentModelService,
-            TraceService traceService
+            TraceService traceService,
+            @Autowired(required = false) TravelCareMetrics metrics
     ) {
         this.taskRepository = taskRepository;
         this.taskService = taskService;
@@ -97,6 +100,7 @@ public class WorkflowTaskWorker {
         this.agentRunService = agentRunService;
         this.agentModelService = agentModelService;
         this.traceService = traceService;
+        this.metrics = metrics;
     }
 
     public WorkflowTaskWorker(WorkflowTaskRepository taskRepository, WorkflowTaskService taskService,
@@ -107,7 +111,7 @@ public class WorkflowTaskWorker {
             ContextAssembler contextAssembler, AgentRunService agentRunService, AgentModelService agentModelService) {
         this(taskRepository, taskService, lockService, workflowEngine, sessionRepository, eventService,
                 intentClassifier, responseGenerator, objectMapper, auditService, humanReviewService,
-                refundCaseRepository, contextAssembler, agentRunService, agentModelService, null);
+                refundCaseRepository, contextAssembler, agentRunService, agentModelService, null, null);
     }
 
     public WorkflowTaskWorker(
@@ -128,7 +132,7 @@ public class WorkflowTaskWorker {
     ) {
         this(taskRepository, taskService, lockService, workflowEngine, sessionRepository, eventService,
                 intentClassifier, responseGenerator, objectMapper, auditService, humanReviewService,
-                refundCaseRepository, contextAssembler, agentRunService, null, null);
+                refundCaseRepository, contextAssembler, agentRunService, null, null, null);
     }
 
     @RabbitListener(queues = RabbitMqConfig.QUEUE_WORKFLOW_TASKS)
@@ -145,6 +149,7 @@ public class WorkflowTaskWorker {
             log.error("Task {} not found", taskId);
             throw new AmqpRejectAndDontRequeueException("workflow task not found: " + taskId);
         }
+        if (metrics != null) metrics.workerStarted(task.getTaskType());
 
         String traceId = stringValue(messagePayload.get("traceId"));
         String parentSpanId = stringValue(messagePayload.get("parentSpanId"));
@@ -179,7 +184,8 @@ public class WorkflowTaskWorker {
             taskService.handleWorkerFailure(taskId, "LOCK_CONFLICT", "Could not acquire lock",
                     LocalDateTime.now().plusMinutes(1), traceId);
         } catch (Exception e) {
-            log.error("Error executing task {}", taskId, e);
+            log.error("worker event=task_failed taskId={} failureCode=SYSTEM_ERROR exceptionType={} message={}",
+                    taskId, e.getClass().getSimpleName(), safeLogMessage(e.getMessage()));
             taskService.handleWorkerFailure(taskId, "SYSTEM_ERROR", e.getMessage(),
                     LocalDateTime.now().plusMinutes(1), traceId);
         }
@@ -466,5 +472,13 @@ public class WorkflowTaskWorker {
 
     private String escape(String value) {
         return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String safeLogMessage(String value) {
+        if (value == null) return "";
+        String sanitized = value
+                .replaceAll("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*", "[REDACTED]")
+                .replaceAll("(?i)(authorization|api[_-]?key|provider[_-]?secret|secret|token)\\s*[:=]\\s*[^\\s,;\\\"}]+", "$1=[REDACTED]");
+        return sanitized.length() > 160 ? sanitized.substring(0, 160) : sanitized;
     }
 }

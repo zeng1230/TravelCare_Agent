@@ -2,6 +2,7 @@ package travelcare_agent.outbox;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import travelcare_agent.observability.TravelCareMetrics;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -13,9 +14,17 @@ public class OutboxEventService {
     public static final String PAYLOAD_VERSION_V1 = "v1";
 
     private final OutboxEventRepository repository;
+    private final TravelCareMetrics metrics;
+
+    public OutboxEventService(OutboxEventRepository repository,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) TravelCareMetrics metrics) {
+        this.repository = repository;
+        this.metrics = metrics;
+        if (metrics != null) metrics.gauge("travelcare.outbox.backlog", repository::countBacklog);
+    }
 
     public OutboxEventService(OutboxEventRepository repository) {
-        this.repository = repository;
+        this(repository, null);
     }
 
     @Transactional
@@ -33,7 +42,9 @@ public class OutboxEventService {
             event.setAttempts(0);
             event.setNextRetryAt(command.nextRetryAt());
             event.setTraceId(command.traceId());
-            return repository.save(event);
+            OutboxEvent saved = repository.save(event);
+            if (metrics != null) metrics.outboxCreated(saved.getEventType());
+            return saved;
         });
     }
 
@@ -56,6 +67,11 @@ public class OutboxEventService {
         event.setPublishedAt(now);
         event.setLastErrorCode(null);
         repository.save(event);
+        if (metrics != null) {
+            Duration latency = event.getCreatedAt() == null ? Duration.ZERO
+                    : Duration.between(event.getCreatedAt(), now);
+            metrics.outboxPublished(event.getEventType(), latency);
+        }
     }
 
     @Transactional
@@ -72,6 +88,13 @@ public class OutboxEventService {
             event.setNextRetryAt(now.plus(retryDelay));
         }
         repository.save(event);
+        if (metrics != null) {
+            if (event.getStatus() == OutboxEventStatus.FAILED) {
+                metrics.outboxFailed(event.getEventType(), event.getLastErrorCode());
+            } else {
+                metrics.outboxRetry(event.getEventType(), event.getLastErrorCode());
+            }
+        }
     }
 
     @Transactional

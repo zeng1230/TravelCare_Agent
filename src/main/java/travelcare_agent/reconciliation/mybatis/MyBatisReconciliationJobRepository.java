@@ -3,6 +3,7 @@ package travelcare_agent.reconciliation.mybatis;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import org.springframework.stereotype.Repository;
 import travelcare_agent.reconciliation.ReconciliationJob;
+import travelcare_agent.reconciliation.ReconciliationJobStatus;
 import travelcare_agent.reconciliation.ReconciliationJobRepository;
 
 import java.time.LocalDateTime;
@@ -41,5 +42,11 @@ public class MyBatisReconciliationJobRepository implements ReconciliationJobRepo
                 .eq(ReconciliationJob::getSourceType, sourceType)
                 .eq(ReconciliationJob::getSourceId, sourceId)
                 .last("limit 1")));
+    }
+
+    @Override
+    public long countPending() {
+        return mapper.selectCount(new LambdaQueryWrapper<ReconciliationJob>()
+                .eq(ReconciliationJob::getStatus, ReconciliationJobStatus.PENDING));
     }
 }
