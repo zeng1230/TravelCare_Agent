@@ -9,6 +9,7 @@ public class ReconciliationService {
     private final ReconciliationJobRepository repository;
     private final TravelCareMetrics metrics;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ReconciliationService(ReconciliationJobRepository repository,
             @org.springframework.beans.factory.annotation.Autowired(required = false) TravelCareMetrics metrics) {
         this.repository = repository;

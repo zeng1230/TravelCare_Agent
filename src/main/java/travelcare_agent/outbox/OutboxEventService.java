@@ -16,6 +16,7 @@ public class OutboxEventService {
     private final OutboxEventRepository repository;
     private final TravelCareMetrics metrics;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public OutboxEventService(OutboxEventRepository repository,
             @org.springframework.beans.factory.annotation.Autowired(required = false) TravelCareMetrics metrics) {
         this.repository = repository;

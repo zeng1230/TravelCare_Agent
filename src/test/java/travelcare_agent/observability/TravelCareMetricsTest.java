@@ -68,13 +68,13 @@ class TravelCareMetricsTest {
         AtomicLong pending = new AtomicLong(3);
 
         metrics.toolStarted("GetOrderTool", false);
-        metrics.toolCompleted("GetOrderTool", "SUCCEEDED", false, Duration.ofMillis(5));
-        metrics.toolFailed("GetOrderTool", "SYSTEM_ERROR", false, Duration.ofMillis(6));
-        metrics.toolUnknown("GetOrderTool", "UNKNOWN", true, Duration.ofMillis(7));
-        metrics.toolSkipped("GetOrderTool", "IDEMPOTENT_REUSE", false);
-        metrics.toolRetry("GetOrderTool", "TRANSIENT_ERROR", true);
+        metrics.toolCompleted("GetOrderTool", false, Duration.ofMillis(5));
+        metrics.toolFailed("GetOrderTool", false, "SYSTEM_ERROR", Duration.ofMillis(6));
+        metrics.toolUnknown("GetOrderTool", true, "UNKNOWN", Duration.ofMillis(7));
+        metrics.toolSkipped("GetOrderTool", false, "IDEMPOTENT_REUSE");
+        metrics.toolRetry("GetOrderTool", true, "TRANSIENT_ERROR");
 
-        metrics.llmRequest("mock", "mock-stage10a", "mock", "REQUESTED");
+        metrics.llmRequest("mock", "mock-stage10a", "mock");
         metrics.llmSuccess("mock", "mock-stage10a", "mock", "ALLOW", Duration.ofMillis(8), 10, 11);
         metrics.llmFailure("mock", "mock-stage10a", "mock", "PROVIDER_ERROR", Duration.ofMillis(9), 12, 0);
         metrics.llmFallback("mock", "mock-stage10a", "mock", "PROVIDER_ERROR");
@@ -97,21 +97,21 @@ class TravelCareMetricsTest {
         metrics.workerSkipped("WORKFLOW_TASK", "NOT_DUE");
         metrics.workerDeadLettered("WORKFLOW_TASK", "MAX_ATTEMPTS");
 
-        metrics.reconciliationCreated("TOOL_CALL");
-        metrics.reconciliationResolved("TOOL_CALL", "CONFIRMED_SUCCESS");
-        metrics.reconciliationResolved("TOOL_CALL", "CONFIRMED_FAILED");
-        metrics.reconciliationResolved("TOOL_CALL", "UNKNOWN");
+        metrics.reconciliationCreated("TOOL_CALL", "UNKNOWN_TOOL_RESULT");
+        metrics.reconciliationResolved("TOOL_CALL", "CONFIRMED_SUCCESS", "MATCHED");
+        metrics.reconciliationResolved("TOOL_CALL", "CONFIRMED_FAILED", "MISMATCH");
+        metrics.reconciliationResolved("TOOL_CALL", "UNKNOWN", "UNKNOWN");
         metrics.gauge("travelcare.reconciliation.pending", pending::get);
 
         assertCounter(registry, "travelcare.tool.call.unknown.total", 1.0);
         assertCounter(registry, "travelcare.tool.call.skipped.total", 1.0);
         assertCounter(registry, "travelcare.tool.call.retry.total", 1.0);
-        assertThat(registry.get("travelcare.tool.call.duration").timer().count()).isEqualTo(3);
+        assertThat(timerCount(registry, "travelcare.tool.call.duration")).isEqualTo(3);
 
         assertCounter(registry, "travelcare.llm.fallback.total", 1.0);
         assertCounter(registry, "travelcare.llm.safety_block.total", 1.0);
-        assertThat(registry.get("travelcare.llm.latency").timer().count()).isEqualTo(2);
-        assertThat(registry.get("travelcare.llm.input_tokens").summary().count()).isEqualTo(2);
+        assertThat(timerCount(registry, "travelcare.llm.latency")).isEqualTo(2);
+        assertThat(summaryCount(registry, "travelcare.llm.input_tokens")).isEqualTo(2);
 
         assertCounter(registry, "travelcare.safety.allowed.total", 1.0);
         assertCounter(registry, "travelcare.safety.blocked.total", 1.0);
@@ -138,5 +138,13 @@ class TravelCareMetricsTest {
 
     private static void assertCounter(SimpleMeterRegistry registry, String name, double count) {
         assertThat(registry.get(name).counter().count()).isEqualTo(count);
+    }
+
+    private static long timerCount(SimpleMeterRegistry registry, String name) {
+        return registry.find(name).timers().stream().mapToLong(io.micrometer.core.instrument.Timer::count).sum();
+    }
+
+    private static long summaryCount(SimpleMeterRegistry registry, String name) {
+        return registry.find(name).summaries().stream().mapToLong(io.micrometer.core.instrument.DistributionSummary::count).sum();
     }
 }
