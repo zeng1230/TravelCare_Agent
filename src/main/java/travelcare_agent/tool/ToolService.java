@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.function.Supplier;
 import java.util.Map;
+
 import travelcare_agent.trace.*;
 
 @Service
@@ -29,8 +30,8 @@ public class ToolService {
 
     @Autowired
     public ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService, TraceService traceService,
-            @Autowired(required = false) ReconciliationService reconciliationService,
-            @Autowired(required = false) TravelCareMetrics metrics) {
+                       @Autowired(required = false) ReconciliationService reconciliationService,
+                       @Autowired(required = false) TravelCareMetrics metrics) {
         this(toolCallRepository, idempotencyService, new ObjectMapper().findAndRegisterModules(), traceService,
                 reconciliationService, metrics);
     }
@@ -48,18 +49,18 @@ public class ToolService {
     }
 
     ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService,
-            ObjectMapper objectMapper, TraceService traceService) {
+                ObjectMapper objectMapper, TraceService traceService) {
         this(toolCallRepository, idempotencyService, objectMapper, traceService, null);
     }
 
     ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService,
-            ObjectMapper objectMapper, TraceService traceService, ReconciliationService reconciliationService) {
+                ObjectMapper objectMapper, TraceService traceService, ReconciliationService reconciliationService) {
         this(toolCallRepository, idempotencyService, objectMapper, traceService, reconciliationService, null);
     }
 
     ToolService(ToolCallRepository toolCallRepository, IdempotencyService idempotencyService,
-            ObjectMapper objectMapper, TraceService traceService, ReconciliationService reconciliationService,
-            TravelCareMetrics metrics) {
+                ObjectMapper objectMapper, TraceService traceService, ReconciliationService reconciliationService,
+                TravelCareMetrics metrics) {
         this.toolCallRepository = toolCallRepository;
         this.idempotencyService = idempotencyService;
         this.objectMapper = objectMapper;
@@ -91,7 +92,8 @@ public class ToolService {
                 traceService.recordEvent(span.traceId(), span.spanId(), TraceEventType.IDEMPOTENCY_REUSED, command.toolName(), Map.of("toolCallId", cached.getId()));
                 traceService.finishSpanSuccess(span, "TOOL_CALL:" + cached.getId(), Map.of("status", cached.getStatus().name(), "reused", true));
             }
-            if (metrics != null) metrics.toolSkipped(command.toolName(), command.sideEffectingExternalCall(), cached.getStatus().name());
+            if (metrics != null)
+                metrics.toolSkipped(command.toolName(), command.sideEffectingExternalCall(), cached.getStatus().name());
             return new ToolExecution<>(cached, deserialize(cached.getResponseJson(), resultType), true);
         }
 
@@ -105,7 +107,10 @@ public class ToolService {
                 command.requestJson(),
                 command.timeoutAt()
         ));
-        if (span.available()) { pending.setTraceId(span.traceId()); pending.setSpanId(span.spanId()); }
+        if (span.available()) {
+            pending.setTraceId(span.traceId());
+            pending.setSpanId(span.spanId());
+        }
         ToolCall toolCall = toolCallRepository.save(pending);
 
         try {
@@ -116,7 +121,8 @@ public class ToolService {
             if (traceService != null) traceService.recordCurrentSnapshot(TraceSnapshotType.TOOL_RESULT,
                     "TOOL_CALL", String.valueOf(toolCall.getId()), snapshotMap(command.toolName(), command.workflowId(), null,
                             toolCall.getStatus().name(), false, result));
-            if (traceService != null) traceService.finishSpanSuccess(span, "TOOL_CALL:" + toolCall.getId(), Map.of("status", toolCall.getStatus().name()));
+            if (traceService != null)
+                traceService.finishSpanSuccess(span, "TOOL_CALL:" + toolCall.getId(), Map.of("status", toolCall.getStatus().name()));
             if (metrics != null) metrics.toolCompleted(command.toolName(), command.sideEffectingExternalCall(),
                     Duration.between(startedAt, Instant.now()));
             return new ToolExecution<>(toolCall, result, false);
@@ -124,7 +130,8 @@ public class ToolService {
             toolCall.fail(errorJson(ex.getResultCode().code(), ex.getMessage()), ex.getResultCode().code());
             toolCallRepository.save(toolCall);
             idempotencyService.markFailed(command.idempotencyKey());
-            if (traceService != null) traceService.finishSpanFailure(span, ex.getResultCode().code(), ex, Map.of("toolCallId", toolCall.getId()));
+            if (traceService != null)
+                traceService.finishSpanFailure(span, ex.getResultCode().code(), ex, Map.of("toolCallId", toolCall.getId()));
             if (metrics != null) metrics.toolFailed(command.toolName(), command.sideEffectingExternalCall(),
                     ex.getResultCode().code(), Duration.between(startedAt, Instant.now()));
             throw ex;
@@ -140,7 +147,8 @@ public class ToolService {
                 reconciliationService.createOrReusePending("tool_call", toolCall.getId(), errorCode, toolCall.getTraceId());
             }
             idempotencyService.markFailed(command.idempotencyKey());
-            if (traceService != null) traceService.finishSpanFailure(span, errorCode, ex, Map.of("toolCallId", toolCall.getId()));
+            if (traceService != null)
+                traceService.finishSpanFailure(span, errorCode, ex, Map.of("toolCallId", toolCall.getId()));
             if (metrics != null) {
                 Duration duration = Duration.between(startedAt, Instant.now());
                 if (toolCall.getStatus() == travelcare_agent.enums.ToolCallStatus.UNKNOWN) {
@@ -197,7 +205,7 @@ public class ToolService {
     }
 
     private static Map<String, Object> snapshotMap(String toolName, Long workflowId, String request,
-            String status, Boolean reused, Object result) {
+                                                   String status, Boolean reused, Object result) {
         Map<String, Object> value = new java.util.LinkedHashMap<>();
         value.put("toolName", toolName);
         if (workflowId != null) value.put("workflowId", workflowId);

@@ -1,3 +1,27 @@
 package travelcare_agent.trace.repository.mybatis;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper; import org.springframework.stereotype.Repository; import travelcare_agent.trace.entity.TraceEvent; import travelcare_agent.trace.repository.TraceEventRepository; import java.util.List;
-@Repository public class MyBatisTraceEventRepository implements TraceEventRepository { private final MyBatisTraceEventMapper mapper; public MyBatisTraceEventRepository(MyBatisTraceEventMapper m){mapper=m;} public TraceEvent save(TraceEvent v){if(v.getId()==null)mapper.insert(v);else mapper.updateById(v);return v;} public List<TraceEvent> findByTraceId(String id){return mapper.selectList(new LambdaQueryWrapper<TraceEvent>().eq(TraceEvent::getTraceId,id).orderByAsc(TraceEvent::getOccurredAt).orderByAsc(TraceEvent::getId));} }
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.springframework.stereotype.Repository;
+import travelcare_agent.trace.entity.TraceEvent;
+import travelcare_agent.trace.repository.TraceEventRepository;
+
+import java.util.List;
+
+@Repository
+public class MyBatisTraceEventRepository implements TraceEventRepository {
+    private final MyBatisTraceEventMapper mapper;
+
+    public MyBatisTraceEventRepository(MyBatisTraceEventMapper m) {
+        mapper = m;
+    }
+
+    public TraceEvent save(TraceEvent v) {
+        if (v.getId() == null) mapper.insert(v);
+        else mapper.updateById(v);
+        return v;
+    }
+
+    public List<TraceEvent> findByTraceId(String id) {
+        return mapper.selectList(new LambdaQueryWrapper<TraceEvent>().eq(TraceEvent::getTraceId, id).orderByAsc(TraceEvent::getOccurredAt).orderByAsc(TraceEvent::getId));
+    }
+}

@@ -1,1 +1,21 @@
-package travelcare_agent.evaluation.scoring; import org.springframework.stereotype.Component; import java.util.*; @Component public class ForbiddenEventScorer implements EvaluationScorer {public String name(){return "forbiddenEvents";} public ScoreResult score(EvaluationScoringContext c){var n=c.expectation()==null?null:c.expectation().get("forbiddenEvents");if(n==null||!n.isArray())return ScoreResult.skipped(name());List<String> e=new ArrayList<>();n.forEach(x->e.add(x.asText()));List<String> found=e.stream().filter(c.eventNames()::contains).toList();return ScoreResult.of(name(),found.isEmpty(),e,found,found.isEmpty()?"forbidden events absent":"forbidden events found: "+found);}}
+package travelcare_agent.evaluation.scoring;
+
+import org.springframework.stereotype.Component;
+
+import java.util.*;
+
+@Component
+public class ForbiddenEventScorer implements EvaluationScorer {
+    public String name() {
+        return "forbiddenEvents";
+    }
+
+    public ScoreResult score(EvaluationScoringContext c) {
+        var n = c.expectation() == null ? null : c.expectation().get("forbiddenEvents");
+        if (n == null || !n.isArray()) return ScoreResult.skipped(name());
+        List<String> e = new ArrayList<>();
+        n.forEach(x -> e.add(x.asText()));
+        List<String> found = e.stream().filter(c.eventNames()::contains).toList();
+        return ScoreResult.of(name(), found.isEmpty(), e, found, found.isEmpty() ? "forbidden events absent" : "forbidden events found: " + found);
+    }
+}

@@ -1,3 +1,27 @@
 package travelcare_agent.trace.repository.mybatis;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper; import org.springframework.stereotype.Repository; import travelcare_agent.trace.entity.TraceSnapshot; import travelcare_agent.trace.repository.TraceSnapshotRepository; import java.util.List;
-@Repository public class MyBatisTraceSnapshotRepository implements TraceSnapshotRepository { private final MyBatisTraceSnapshotMapper mapper; public MyBatisTraceSnapshotRepository(MyBatisTraceSnapshotMapper m){mapper=m;} public TraceSnapshot save(TraceSnapshot v){if(v.getId()==null)mapper.insert(v);else mapper.updateById(v);return v;} public List<TraceSnapshot> findByTraceId(String id){return mapper.selectList(new LambdaQueryWrapper<TraceSnapshot>().eq(TraceSnapshot::getTraceId,id).orderByAsc(TraceSnapshot::getCreatedAt).orderByAsc(TraceSnapshot::getId));} }
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.springframework.stereotype.Repository;
+import travelcare_agent.trace.entity.TraceSnapshot;
+import travelcare_agent.trace.repository.TraceSnapshotRepository;
+
+import java.util.List;
+
+@Repository
+public class MyBatisTraceSnapshotRepository implements TraceSnapshotRepository {
+    private final MyBatisTraceSnapshotMapper mapper;
+
+    public MyBatisTraceSnapshotRepository(MyBatisTraceSnapshotMapper m) {
+        mapper = m;
+    }
+
+    public TraceSnapshot save(TraceSnapshot v) {
+        if (v.getId() == null) mapper.insert(v);
+        else mapper.updateById(v);
+        return v;
+    }
+
+    public List<TraceSnapshot> findByTraceId(String id) {
+        return mapper.selectList(new LambdaQueryWrapper<TraceSnapshot>().eq(TraceSnapshot::getTraceId, id).orderByAsc(TraceSnapshot::getCreatedAt).orderByAsc(TraceSnapshot::getId));
+    }
+}

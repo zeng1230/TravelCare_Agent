@@ -1,2 +1,19 @@
-package travelcare_agent.evaluation.repository; import travelcare_agent.evaluation.entity.EvaluationCase; import java.util.*;
-public interface EvaluationCaseRepository { EvaluationCase save(EvaluationCase value); Optional<EvaluationCase> findById(Long id); Optional<EvaluationCase> findByDatasetIdAndCaseKey(Long datasetId,String caseKey); List<EvaluationCase> findByDatasetId(Long id); List<EvaluationCase> findEnabledCasesByDatasetId(Long id); void deleteById(Long id); }
+package travelcare_agent.evaluation.repository;
+
+import travelcare_agent.evaluation.entity.EvaluationCase;
+
+import java.util.*;
+
+public interface EvaluationCaseRepository {
+    EvaluationCase save(EvaluationCase value);
+
+    Optional<EvaluationCase> findById(Long id);
+
+    Optional<EvaluationCase> findByDatasetIdAndCaseKey(Long datasetId, String caseKey);
+
+    List<EvaluationCase> findByDatasetId(Long id);
+
+    List<EvaluationCase> findEnabledCasesByDatasetId(Long id);
+
+    void deleteById(Long id);
+}

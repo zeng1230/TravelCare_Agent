@@ -1,3 +1,32 @@
 package travelcare_agent.trace.repository.mybatis;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper; import org.springframework.stereotype.Repository; import travelcare_agent.trace.entity.TraceSpan; import travelcare_agent.trace.repository.TraceSpanRepository; import java.util.List; import java.util.Optional;
-@Repository public class MyBatisTraceSpanRepository implements TraceSpanRepository { private final MyBatisTraceSpanMapper mapper; public MyBatisTraceSpanRepository(MyBatisTraceSpanMapper m){mapper=m;} public TraceSpan save(TraceSpan v){if(v.getId()==null)mapper.insert(v);else mapper.updateById(v);return v;} public Optional<TraceSpan> findBySpanId(String id){return Optional.ofNullable(mapper.selectOne(new LambdaQueryWrapper<TraceSpan>().eq(TraceSpan::getSpanId,id).last("limit 1")));} public List<TraceSpan> findByTraceId(String id){return mapper.selectList(new LambdaQueryWrapper<TraceSpan>().eq(TraceSpan::getTraceId,id).orderByAsc(TraceSpan::getStartedAt).orderByAsc(TraceSpan::getId));} }
+
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import org.springframework.stereotype.Repository;
+import travelcare_agent.trace.entity.TraceSpan;
+import travelcare_agent.trace.repository.TraceSpanRepository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public class MyBatisTraceSpanRepository implements TraceSpanRepository {
+    private final MyBatisTraceSpanMapper mapper;
+
+    public MyBatisTraceSpanRepository(MyBatisTraceSpanMapper m) {
+        mapper = m;
+    }
+
+    public TraceSpan save(TraceSpan v) {
+        if (v.getId() == null) mapper.insert(v);
+        else mapper.updateById(v);
+        return v;
+    }
+
+    public Optional<TraceSpan> findBySpanId(String id) {
+        return Optional.ofNullable(mapper.selectOne(new LambdaQueryWrapper<TraceSpan>().eq(TraceSpan::getSpanId, id).last("limit 1")));
+    }
+
+    public List<TraceSpan> findByTraceId(String id) {
+        return mapper.selectList(new LambdaQueryWrapper<TraceSpan>().eq(TraceSpan::getTraceId, id).orderByAsc(TraceSpan::getStartedAt).orderByAsc(TraceSpan::getId));
+    }
+}

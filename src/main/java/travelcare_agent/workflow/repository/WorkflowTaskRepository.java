@@ -8,8 +8,11 @@ import java.util.Optional;
 
 public interface WorkflowTaskRepository {
     WorkflowTask save(WorkflowTask task);
+
     Optional<WorkflowTask> findById(Long id);
+
     Optional<WorkflowTask> findByWorkflowId(Long workflowId);
+
     List<WorkflowTask> findPendingTasksCreatedBefore(LocalDateTime dateTime);
 }
 

@@ -1,1 +1,22 @@
-package travelcare_agent.evaluation.scoring; import org.springframework.stereotype.Component; import java.util.*; @Component public class DiffRiskScorer implements EvaluationScorer {private static final List<String> ORDER=List.of("NONE","LOW","MEDIUM","HIGH","CRITICAL");public String name(){return "diffRisk";} public ScoreResult score(EvaluationScoringContext c){var n=c.expectation()==null?null:c.expectation().get("maxDiffRisk");if(n==null||n.isNull())return ScoreResult.skipped(name());String e=n.asText().toUpperCase(),a=Objects.toString(c.riskLevel(),"CRITICAL").toUpperCase();boolean p=ORDER.indexOf(a)>=0&&ORDER.indexOf(a)<=ORDER.indexOf(e);return ScoreResult.of(name(),p,e,a,p?"diff risk within limit":"diff risk exceeds limit");}}
+package travelcare_agent.evaluation.scoring;
+
+import org.springframework.stereotype.Component;
+
+import java.util.*;
+
+@Component
+public class DiffRiskScorer implements EvaluationScorer {
+    private static final List<String> ORDER = List.of("NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL");
+
+    public String name() {
+        return "diffRisk";
+    }
+
+    public ScoreResult score(EvaluationScoringContext c) {
+        var n = c.expectation() == null ? null : c.expectation().get("maxDiffRisk");
+        if (n == null || n.isNull()) return ScoreResult.skipped(name());
+        String e = n.asText().toUpperCase(), a = Objects.toString(c.riskLevel(), "CRITICAL").toUpperCase();
+        boolean p = ORDER.indexOf(a) >= 0 && ORDER.indexOf(a) <= ORDER.indexOf(e);
+        return ScoreResult.of(name(), p, e, a, p ? "diff risk within limit" : "diff risk exceeds limit");
+    }
+}

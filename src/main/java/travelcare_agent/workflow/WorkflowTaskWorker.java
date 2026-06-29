@@ -37,6 +37,7 @@ import travelcare_agent.refund.repository.RefundCaseRepository;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+
 import travelcare_agent.trace.*;
 
 @Component
@@ -104,11 +105,11 @@ public class WorkflowTaskWorker {
     }
 
     public WorkflowTaskWorker(WorkflowTaskRepository taskRepository, WorkflowTaskService taskService,
-            LockService lockService, WorkflowEngine workflowEngine, SessionRepository sessionRepository,
-            SessionEventService eventService, MockIntentClassifier intentClassifier,
-            MockResponseGenerator responseGenerator, ObjectMapper objectMapper, AuditService auditService,
-            HumanReviewService humanReviewService, RefundCaseRepository refundCaseRepository,
-            ContextAssembler contextAssembler, AgentRunService agentRunService, AgentModelService agentModelService) {
+                              LockService lockService, WorkflowEngine workflowEngine, SessionRepository sessionRepository,
+                              SessionEventService eventService, MockIntentClassifier intentClassifier,
+                              MockResponseGenerator responseGenerator, ObjectMapper objectMapper, AuditService auditService,
+                              HumanReviewService humanReviewService, RefundCaseRepository refundCaseRepository,
+                              ContextAssembler contextAssembler, AgentRunService agentRunService, AgentModelService agentModelService) {
         this(taskRepository, taskService, lockService, workflowEngine, sessionRepository, eventService,
                 intentClassifier, responseGenerator, objectMapper, auditService, humanReviewService,
                 refundCaseRepository, contextAssembler, agentRunService, agentModelService, null, null);
@@ -158,37 +159,37 @@ public class WorkflowTaskWorker {
 
         try (TraceContextHolder.Scope ignored = asyncSpan.available()
                 ? TraceContextHolder.attach(asyncSpan.traceId(), asyncSpan.spanId()) : null) {
-        if (task.getStatus() != WorkflowTaskStatus.PENDING && task.getStatus() != WorkflowTaskStatus.DISPATCHED) {
-            log.info("Task {} is in status {}, skipping", taskId, task.getStatus());
-            taskService.recordSkipped(taskId, "TERMINAL_OR_NON_RUNNABLE_STATUS");
-            return;
-        }
+            if (task.getStatus() != WorkflowTaskStatus.PENDING && task.getStatus() != WorkflowTaskStatus.DISPATCHED) {
+                log.info("Task {} is in status {}, skipping", taskId, task.getStatus());
+                taskService.recordSkipped(taskId, "TERMINAL_OR_NON_RUNNABLE_STATUS");
+                return;
+            }
 
-        String lockKey = "workflow:" + task.getWorkflowId() + ":lock";
-        
-        try {
-            lockService.withLock(lockKey, 30000, () -> {
-                // Re-fetch inside lock to ensure we have latest state
-                WorkflowTask lockedTask = taskRepository.findById(taskId).orElseThrow();
-                if (lockedTask.getStatus() != WorkflowTaskStatus.PENDING && lockedTask.getStatus() != WorkflowTaskStatus.DISPATCHED) {
-                    taskService.recordSkipped(taskId, "STALE_AFTER_LOCK");
+            String lockKey = "workflow:" + task.getWorkflowId() + ":lock";
+
+            try {
+                lockService.withLock(lockKey, 30000, () -> {
+                    // Re-fetch inside lock to ensure we have latest state
+                    WorkflowTask lockedTask = taskRepository.findById(taskId).orElseThrow();
+                    if (lockedTask.getStatus() != WorkflowTaskStatus.PENDING && lockedTask.getStatus() != WorkflowTaskStatus.DISPATCHED) {
+                        taskService.recordSkipped(taskId, "STALE_AFTER_LOCK");
+                        return null;
+                    }
+
+                    taskService.updateStatus(taskId, WorkflowTaskStatus.RUNNING);
+                    executeWorkflow(lockedTask);
                     return null;
-                }
-                
-                taskService.updateStatus(taskId, WorkflowTaskStatus.RUNNING);
-                executeWorkflow(lockedTask);
-                return null;
-            });
-        } catch (IllegalStateException e) {
-            log.warn("Lock conflict for task {}: {}", taskId, e.getMessage());
-            taskService.handleWorkerFailure(taskId, "LOCK_CONFLICT", "Could not acquire lock",
-                    LocalDateTime.now().plusMinutes(1), traceId);
-        } catch (Exception e) {
-            log.error("worker event=task_failed taskId={} failureCode=SYSTEM_ERROR exceptionType={} message={}",
-                    taskId, e.getClass().getSimpleName(), safeLogMessage(e.getMessage()));
-            taskService.handleWorkerFailure(taskId, "SYSTEM_ERROR", e.getMessage(),
-                    LocalDateTime.now().plusMinutes(1), traceId);
-        }
+                });
+            } catch (IllegalStateException e) {
+                log.warn("Lock conflict for task {}: {}", taskId, e.getMessage());
+                taskService.handleWorkerFailure(taskId, "LOCK_CONFLICT", "Could not acquire lock",
+                        LocalDateTime.now().plusMinutes(1), traceId);
+            } catch (Exception e) {
+                log.error("worker event=task_failed taskId={} failureCode=SYSTEM_ERROR exceptionType={} message={}",
+                        taskId, e.getClass().getSimpleName(), safeLogMessage(e.getMessage()));
+                taskService.handleWorkerFailure(taskId, "SYSTEM_ERROR", e.getMessage(),
+                        LocalDateTime.now().plusMinutes(1), traceId);
+            }
         } finally {
             if (traceService != null) traceService.finishSpanSuccess(asyncSpan, "WORKFLOW_TASK:" + taskId, Map.of());
         }
@@ -201,7 +202,8 @@ public class WorkflowTaskWorker {
         }
         if (rawPayload instanceof String text) {
             try {
-                return objectMapper.readValue(text, new TypeReference<>() {});
+                return objectMapper.readValue(text, new TypeReference<>() {
+                });
             } catch (Exception ex) {
                 throw new AmqpRejectAndDontRequeueException("invalid workflow task payload", ex);
             }
@@ -213,9 +215,10 @@ public class WorkflowTaskWorker {
         AgentRun agentRun = null;
         try {
             Session session = sessionRepository.findById(task.getSessionId()).orElseThrow(() -> new BusinessException(travelcare_agent.common.result.ResultCode.NOT_FOUND, "Session not found"));
-            
+
             // Extract message from payload
-            Map<String, String> payload = objectMapper.readValue(task.getPayloadJson(), new TypeReference<>() {});
+            Map<String, String> payload = objectMapper.readValue(task.getPayloadJson(), new TypeReference<>() {
+            });
             String content = payload.get("message");
             Long userEventId = extractLong(payload.get("userEventId"));
             agentRun = safeStartAgentRun(
@@ -227,14 +230,14 @@ public class WorkflowTaskWorker {
                     "workflow_task_worker",
                     "WORKER"
             );
-            
+
             List<Long> modelInputEventIds = userEventId == null ? List.of() : List.of(userEventId);
             MockIntentClassifier.IntentResult intent = agentModelService == null
                     ? intentClassifier.classify(content)
                     : agentModelService.classifyIntentAndExtractSlots(
-                            task.getSessionId(), task.getWorkflowId(), modelInputEventIds, List.of(), content
-                    );
-            
+                    task.getSessionId(), task.getWorkflowId(), modelInputEventIds, List.of(), content
+            );
+
             WorkflowEngine.WorkflowCommand command = new WorkflowEngine.WorkflowCommand(
                     session.getId(),
                     session.getUserId(),
@@ -279,9 +282,9 @@ public class WorkflowTaskWorker {
                 answer = agentModelService == null
                         ? deterministicAnswer
                         : agentModelService.generateCustomerAnswer(
-                                task.getSessionId(), task.getWorkflowId(), modelInputEventIds,
-                                retrievalContextIds, deterministicAnswer
-                        );
+                        task.getSessionId(), task.getWorkflowId(), modelInputEventIds,
+                        retrievalContextIds, deterministicAnswer
+                );
             } catch (RuntimeException ex) {
                 safeMarkFailed(agentRun, "FAILED_GENERATION", "RESPONSE_GENERATION_FAILED", ex);
                 throw ex;
@@ -295,7 +298,8 @@ public class WorkflowTaskWorker {
             String metaJson = "{}";
             try {
                 metaJson = objectMapper.writeValueAsString(metaMap);
-            } catch (Exception ignore) {}
+            } catch (Exception ignore) {
+            }
 
             travelcare_agent.conversation.entity.SessionEvent assistantEvent;
             TraceService.SpanHandle outputSpan = traceService == null ? TraceService.SpanHandle.unavailable()
@@ -322,20 +326,22 @@ public class WorkflowTaskWorker {
 
             if (result.workflow().getStatus() == travelcare_agent.enums.WorkflowStatus.NEED_HUMAN) {
                 taskService.markTerminalState(task.getId(), WorkflowTaskStatus.NEED_HUMAN);
-                
+
                 // Try to resolve refundCaseId
                 Long refundCaseId = refundCaseRepository.findByWorkflowId(task.getWorkflowId())
                         .map(RefundCase::getId).orElse(null);
-                
+
                 // Extract reasonCode from workflow state if present
                 String reasonCode = "NEED_HUMAN";
                 try {
-                    Map<String, String> state = objectMapper.readValue(result.workflow().getStateJson(), new TypeReference<>() {});
+                    Map<String, String> state = objectMapper.readValue(result.workflow().getStateJson(), new TypeReference<>() {
+                    });
                     if (state != null && state.containsKey("reasonCode")) {
                         reasonCode = state.get("reasonCode");
                     }
-                } catch (Exception ignore) {}
-                
+                } catch (Exception ignore) {
+                }
+
                 humanReviewService.createCase(
                         task.getSessionId(),
                         task.getWorkflowId(),
@@ -370,7 +376,9 @@ public class WorkflowTaskWorker {
         return null;
     }
 
-    private String stringValue(Object value) { return value == null ? null : String.valueOf(value); }
+    private String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
 
     private void recordStage3Audit(Long sessionId, Long workflowId, AgentContext agentContext) {
         List<Long> documentIds = agentContext.policySnippets().stream()

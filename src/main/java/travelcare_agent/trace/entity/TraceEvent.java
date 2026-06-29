@@ -1,4 +1,75 @@
 package travelcare_agent.trace.entity;
-import com.baomidou.mybatisplus.annotation.IdType; import com.baomidou.mybatisplus.annotation.TableId; import com.baomidou.mybatisplus.annotation.TableName; import java.time.LocalDateTime;
-@TableName("agent_trace_events") public class TraceEvent { @TableId(type=IdType.ASSIGN_ID) private Long id; private String traceId; private String spanId; private String eventType; private String name; private String metadataJson; private LocalDateTime occurredAt;
- public Long getId(){return id;} public void setId(Long v){id=v;} public String getTraceId(){return traceId;} public void setTraceId(String v){traceId=v;} public String getSpanId(){return spanId;} public void setSpanId(String v){spanId=v;} public String getEventType(){return eventType;} public void setEventType(String v){eventType=v;} public String getName(){return name;} public void setName(String v){name=v;} public String getMetadataJson(){return metadataJson;} public void setMetadataJson(String v){metadataJson=v;} public LocalDateTime getOccurredAt(){return occurredAt;} public void setOccurredAt(LocalDateTime v){occurredAt=v;} }
+
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+
+import java.time.LocalDateTime;
+
+@TableName("agent_trace_events")
+public class TraceEvent {
+    @TableId(type = IdType.ASSIGN_ID)
+    private Long id;
+    private String traceId;
+    private String spanId;
+    private String eventType;
+    private String name;
+    private String metadataJson;
+    private LocalDateTime occurredAt;
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long v) {
+        id = v;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    public void setTraceId(String v) {
+        traceId = v;
+    }
+
+    public String getSpanId() {
+        return spanId;
+    }
+
+    public void setSpanId(String v) {
+        spanId = v;
+    }
+
+    public String getEventType() {
+        return eventType;
+    }
+
+    public void setEventType(String v) {
+        eventType = v;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String v) {
+        name = v;
+    }
+
+    public String getMetadataJson() {
+        return metadataJson;
+    }
+
+    public void setMetadataJson(String v) {
+        metadataJson = v;
+    }
+
+    public LocalDateTime getOccurredAt() {
+        return occurredAt;
+    }
+
+    public void setOccurredAt(LocalDateTime v) {
+        occurredAt = v;
+    }
+}

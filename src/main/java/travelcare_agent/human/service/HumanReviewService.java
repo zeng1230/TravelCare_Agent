@@ -22,6 +22,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.Map;
+
 import travelcare_agent.trace.*;
 
 @Service
@@ -50,8 +51,9 @@ public class HumanReviewService {
         this.refundCaseRepository = refundCaseRepository;
         this.traceService = traceService;
     }
+
     public HumanReviewService(HumanReviewCaseRepository repository, SessionEventService eventService,
-            AuditService auditService, WorkflowRepository workflowRepository, RefundCaseRepository refundCaseRepository) {
+                              AuditService auditService, WorkflowRepository workflowRepository, RefundCaseRepository refundCaseRepository) {
         this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null);
     }
 
@@ -68,8 +70,9 @@ public class HumanReviewService {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.HUMAN_REVIEW_WRITE);
         TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
                 : traceService.startSpan(SpanType.HUMAN_REVIEW, "create-human-review", Map.of("reasonCode", reasonCode));
-        if (traceService != null) traceService.recordEvent(span.traceId(), span.spanId(), TraceEventType.HANDOFF_REQUIRED,
-                "handoff-required", Map.of("reasonCode", reasonCode));
+        if (traceService != null)
+            traceService.recordEvent(span.traceId(), span.spanId(), TraceEventType.HANDOFF_REQUIRED,
+                    "handoff-required", Map.of("reasonCode", reasonCode));
         HumanReviewCase hrCase = new HumanReviewCase();
         hrCase.setSessionId(sessionId);
         hrCase.setWorkflowId(workflowId);
@@ -96,7 +99,8 @@ public class HumanReviewService {
                 "{\"reasonCode\":\"" + reasonCode + "\"}"
         );
 
-        if (traceService != null) traceService.finishSpanSuccess(span, "HUMAN_REVIEW_CASE:" + hrCase.getId(), Map.of("status", hrCase.getStatus().name()));
+        if (traceService != null)
+            traceService.finishSpanSuccess(span, "HUMAN_REVIEW_CASE:" + hrCase.getId(), Map.of("status", hrCase.getStatus().name()));
         return hrCase;
     }
 

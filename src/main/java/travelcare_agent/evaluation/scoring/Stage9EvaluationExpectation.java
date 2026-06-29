@@ -1,6 +1,7 @@
 package travelcare_agent.evaluation.scoring;
 
 import com.fasterxml.jackson.databind.JsonNode;
+
 import java.util.List;
 
 record Stage9EvaluationExpectation(

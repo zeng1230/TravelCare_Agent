@@ -8,7 +8,10 @@ import java.util.Optional;
 
 public interface HumanReviewCaseRepository {
     HumanReviewCase save(HumanReviewCase hrCase);
+
     Optional<HumanReviewCase> findById(Long id);
+
     List<HumanReviewCase> findByStatus(HumanReviewCaseStatus status);
+
     Optional<HumanReviewCase> findByWorkflowId(Long workflowId);
 }

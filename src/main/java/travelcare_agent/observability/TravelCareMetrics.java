@@ -163,7 +163,7 @@ public class TravelCareMetrics {
     }
 
     public void llmSuccess(String provider, String model, String mode, String safetyDecision,
-            Duration latency, Integer inputTokens, Integer outputTokens) {
+                           Duration latency, Integer inputTokens, Integer outputTokens) {
         counter("travelcare.llm.success.total", llmTags(provider, model, mode, "SUCCESS", null, safetyDecision));
         timer("travelcare.llm.latency", latency, llmTags(provider, model, mode, "SUCCESS", null, safetyDecision));
         tokenSummary("travelcare.llm.input_tokens", inputTokens, llmTags(provider, model, mode, "SUCCESS", null, safetyDecision));
@@ -171,7 +171,7 @@ public class TravelCareMetrics {
     }
 
     public void llmFailure(String provider, String model, String mode, String failureCode,
-            Duration latency, Integer inputTokens, Integer outputTokens) {
+                           Duration latency, Integer inputTokens, Integer outputTokens) {
         counter("travelcare.llm.failure.total", llmTags(provider, model, mode, "FAILURE", failureCode, null));
         timer("travelcare.llm.latency", latency, llmTags(provider, model, mode, "FAILURE", failureCode, null));
         tokenSummary("travelcare.llm.input_tokens", inputTokens, llmTags(provider, model, mode, "FAILURE", failureCode, null));
@@ -274,7 +274,7 @@ public class TravelCareMetrics {
     }
 
     private static Map<String, String> llmTags(String provider, String model, String mode, String result,
-            String failureCode, String safetyDecision) {
+                                               String failureCode, String safetyDecision) {
         java.util.LinkedHashMap<String, String> tags = new java.util.LinkedHashMap<>();
         tags.put("provider", provider);
         tags.put("model", normalizeModel(model));

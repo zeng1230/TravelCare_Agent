@@ -1,2 +1,18 @@
-package travelcare_agent.evaluation.scoring; import org.springframework.stereotype.Component;
-@Component public class PolicyDecisionScorer implements EvaluationScorer {public String name(){return "policyDecision";} public ScoreResult score(EvaluationScoringContext c){var n=c.expectation()==null?null:c.expectation().get("expectedPolicyDecision");if(n==null||n.isNull())return ScoreResult.skipped(name());String e=n.asText();boolean p=e.equals(c.policyDecision());return ScoreResult.of(name(),p,e,c.policyDecision(),p?"policy decision matched":"policy decision mismatch");}}
+package travelcare_agent.evaluation.scoring;
+
+import org.springframework.stereotype.Component;
+
+@Component
+public class PolicyDecisionScorer implements EvaluationScorer {
+    public String name() {
+        return "policyDecision";
+    }
+
+    public ScoreResult score(EvaluationScoringContext c) {
+        var n = c.expectation() == null ? null : c.expectation().get("expectedPolicyDecision");
+        if (n == null || n.isNull()) return ScoreResult.skipped(name());
+        String e = n.asText();
+        boolean p = e.equals(c.policyDecision());
+        return ScoreResult.of(name(), p, e, c.policyDecision(), p ? "policy decision matched" : "policy decision mismatch");
+    }
+}

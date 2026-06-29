@@ -1,11 +1,13 @@
 package travelcare_agent.evaluation.scoring;
 
 import com.fasterxml.jackson.databind.JsonNode;
+
 import java.time.LocalDateTime;
 import java.util.*;
 
 final class Stage9ScoringSupport {
-    private Stage9ScoringSupport() {}
+    private Stage9ScoringSupport() {
+    }
 
     static boolean hasStage9Snapshots(EvaluationScoringContext c) {
         return c != null && c.answerabilityDecisionSnapshot() != null && c.citationSummarySnapshot() != null;
