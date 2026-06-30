@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.ai.chat.model.ChatModel;
 
 @Configuration
 public class ChatModelProviderConfiguration {
@@ -25,14 +26,28 @@ public class ChatModelProviderConfiguration {
     }
 
     @Bean
+    @ConditionalOnProperty(prefix = "travelcare.agent", name = "provider", havingValue = "spring-ai")
+    public SpringAiChatModelProvider springAiChatModelProvider(
+            AgentProviderProperties properties,
+            ObjectProvider<ChatModel> chatModel,
+            ObjectMapper objectMapper
+    ) {
+        return new SpringAiChatModelProvider(chatModel.getIfAvailable(), properties, objectMapper);
+    }
+
+    @Bean
     @Primary
     public ChatModelProvider chatModelProvider(
             AgentProviderProperties properties,
             MockChatModelProvider mockProvider,
-            ObjectProvider<DeepSeekChatModelProvider> deepSeekProvider
+            ObjectProvider<DeepSeekChatModelProvider> deepSeekProvider,
+            ObjectProvider<SpringAiChatModelProvider> springAiProvider
     ) {
-        return properties.getProvider() == AgentProviderType.DEEPSEEK
-                ? deepSeekProvider.getObject()
-                : mockProvider;
+        return switch (properties.getProvider()) {
+            case DEEPSEEK -> deepSeekProvider.getObject();
+            case SPRING_AI -> springAiProvider.getObject();
+            case MOCK -> mockProvider;
+        };
     }
+
 }
