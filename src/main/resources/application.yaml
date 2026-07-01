@@ -37,6 +37,12 @@ travelcare:
     issuer: ${TRAVELCARE_JWT_ISSUER:travelcare-agent}
     secret: ${TRAVELCARE_JWT_SECRET:change-me-in-local-env}
     ttl-seconds: ${TRAVELCARE_JWT_TTL_SECONDS:7200}
+  supplier:
+    mode: ${TRAVELCARE_SUPPLIER_MODE:mock}
+    gateway:
+      base-url: ${TRAVELCARE_SUPPLIER_GATEWAY_BASE_URL:http://localhost:8081}
+      connect-timeout-ms: ${TRAVELCARE_SUPPLIER_CONNECT_TIMEOUT_MS:1000}
+      read-timeout-ms: ${TRAVELCARE_SUPPLIER_READ_TIMEOUT_MS:2000}
 
 mybatis-plus:
   configuration:

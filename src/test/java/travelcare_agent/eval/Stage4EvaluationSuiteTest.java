@@ -1,5 +1,7 @@
 package travelcare_agent.eval;
 
+import travelcare_agent.adapter.order.OrderSnapshot;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -321,16 +323,16 @@ class Stage4EvaluationSuiteTest {
         MockOrderAdapter stage4MockOrderAdapter() {
             return new MockOrderAdapter((orderId, orderNo, userId) -> {
                 if ("ORD-1001".equalsIgnoreCase(orderNo)) {
-                    return Optional.of(new MockOrderAdapter.OrderSnapshot(1001L, "ORD-1001", userId, OrderStatus.PAID, true, new BigDecimal("100.00"), LocalDateTime.now().plusDays(5)));
+                    return Optional.of(new OrderSnapshot(1001L, "ORD-1001", userId, OrderStatus.PAID, true, new BigDecimal("100.00"), LocalDateTime.now().plusDays(5)));
                 }
                 if ("ORD-2002".equalsIgnoreCase(orderNo)) {
-                    return Optional.of(new MockOrderAdapter.OrderSnapshot(2002L, "ORD-2002", userId, OrderStatus.USED, true, new BigDecimal("80.00"), LocalDateTime.now().plusDays(5)));
+                    return Optional.of(new OrderSnapshot(2002L, "ORD-2002", userId, OrderStatus.USED, true, new BigDecimal("80.00"), LocalDateTime.now().plusDays(5)));
                 }
                 if ("ORD-2003".equalsIgnoreCase(orderNo)) {
-                    return Optional.of(new MockOrderAdapter.OrderSnapshot(2003L, "ORD-2003", userId, OrderStatus.PAID, true, new BigDecimal("120.00"), LocalDateTime.now().plusHours(12)));
+                    return Optional.of(new OrderSnapshot(2003L, "ORD-2003", userId, OrderStatus.PAID, true, new BigDecimal("120.00"), LocalDateTime.now().plusHours(12)));
                 }
                 if ("ORD-2004".equalsIgnoreCase(orderNo)) {
-                    return Optional.of(new MockOrderAdapter.OrderSnapshot(2004L, "ORD-2004", userId, OrderStatus.PAID, false, new BigDecimal("150.00"), LocalDateTime.now().plusDays(5)));
+                    return Optional.of(new OrderSnapshot(2004L, "ORD-2004", userId, OrderStatus.PAID, false, new BigDecimal("150.00"), LocalDateTime.now().plusDays(5)));
                 }
                 return Optional.empty();
             });

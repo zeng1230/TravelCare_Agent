@@ -2,7 +2,7 @@ package travelcare_agent.dryrun;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
-import travelcare_agent.adapter.order.MockOrderAdapter;
+import travelcare_agent.adapter.order.OrderSnapshot;
 import travelcare_agent.policy.RefundEligibilityPolicy;
 import travelcare_agent.trace.SpanType;
 import travelcare_agent.trace.TraceContextHolder;
@@ -10,7 +10,6 @@ import travelcare_agent.trace.TraceQueryService;
 import travelcare_agent.trace.TraceService;
 import travelcare_agent.trace.TraceSnapshotType;
 import travelcare_agent.trace.entity.TraceSnapshot;
-import travelcare_agent.workflow.workflows.OrderRefundInquiryWorkflow;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
@@ -79,7 +78,7 @@ public class DiagnosticDryRunService {
 
             TraceService.SpanHandle tool=traceService.startSpan(SpanType.TOOL,"snapshot-GetOrderTool",Map.of("source","snapshot"));
             copy(root,snapshots,TraceSnapshotType.TOOL_REQUEST);
-            MockOrderAdapter.OrderSnapshot order=snapshotToolExecutor.order(snapshots.get(TraceSnapshotType.TOOL_RESULT.name()));
+            OrderSnapshot order=snapshotToolExecutor.order(snapshots.get(TraceSnapshotType.TOOL_RESULT.name()));
             traceService.recordSnapshot(root.traceId(),tool.spanId(),TraceSnapshotType.TOOL_RESULT.name(),"TRACE_SNAPSHOT",originalTraceId,
                     objectMapper.readTree(snapshots.get(TraceSnapshotType.TOOL_RESULT.name()).getPayloadJson()));
             traceService.finishSpanSuccess(tool,"TRACE_SNAPSHOT:"+originalTraceId,Map.of("status","SUCCEEDED","source","snapshot"));
@@ -87,9 +86,7 @@ public class DiagnosticDryRunService {
             var policyInput=objectMapper.readTree(snapshots.get(TraceSnapshotType.POLICY_INPUT.name()).getPayloadJson());
             LocalDateTime evaluatedAt=objectMapper.treeToValue(policyInput.path("evaluatedAt"),LocalDateTime.class);
             Long currentUserId=policyInput.path("currentUserId").asLong();
-            OrderRefundInquiryWorkflow.OrderSnapshot policyOrder=OrderRefundInquiryWorkflow.OrderSnapshot.of(
-                    order.orderId(),order.orderNo(),order.userId(),order.status(),order.refundable(),order.paidAmount(),order.departureTime());
-            var decision=refundEligibilityPolicy.evaluateAt(policyOrder,currentUserId,evaluatedAt);
+            var decision=refundEligibilityPolicy.evaluateAt(order,currentUserId,evaluatedAt);
 
             TraceService.SpanHandle workflow=traceService.startSpan(SpanType.WORKFLOW,"dry-run-order-refund-inquiry",Map.of("source","simulator"));
             DryRunWorkflowSimulator.Simulation simulation=workflowSimulator.simulate(order,decision);

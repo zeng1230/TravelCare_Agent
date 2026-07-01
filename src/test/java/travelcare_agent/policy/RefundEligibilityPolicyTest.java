@@ -1,9 +1,10 @@
 package travelcare_agent.policy;
 
+import travelcare_agent.adapter.order.OrderSnapshot;
+
 import org.junit.jupiter.api.Test;
 import travelcare_agent.enums.OrderStatus;
 import travelcare_agent.enums.RefundCaseStatus;
-import travelcare_agent.workflow.workflows.OrderRefundInquiryWorkflow;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -96,13 +97,13 @@ class RefundEligibilityPolicyTest {
         assertThat(decision.policyResultJson()).contains("\"departureTime\":\"FAIL\"");
     }
 
-    private static OrderRefundInquiryWorkflow.OrderSnapshot order(
+    private static OrderSnapshot order(
             Long userId,
             OrderStatus status,
             boolean refundable,
             LocalDateTime departureTime
     ) {
-        return OrderRefundInquiryWorkflow.OrderSnapshot.of(
+        return new OrderSnapshot(
                 10L,
                 "ORD-10",
                 userId,

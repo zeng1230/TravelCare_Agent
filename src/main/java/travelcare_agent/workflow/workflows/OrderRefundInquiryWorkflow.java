@@ -2,9 +2,9 @@ package travelcare_agent.workflow.workflows;
 
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
-import travelcare_agent.adapter.order.MockOrderAdapter;
+import travelcare_agent.adapter.order.OrderAdapter;
+import travelcare_agent.adapter.order.OrderSnapshot;
 import travelcare_agent.audit.AuditService;
-import travelcare_agent.enums.OrderStatus;
 import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.policy.RefundEligibilityDecision;
 import travelcare_agent.policy.RefundEligibilityPolicy;
@@ -15,7 +15,6 @@ import travelcare_agent.workflow.ExecutableWorkflow;
 import travelcare_agent.workflow.WorkflowEngine;
 import travelcare_agent.workflow.entity.WorkflowStep;
 
-import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.Optional;
@@ -25,7 +24,7 @@ public class OrderRefundInquiryWorkflow implements ExecutableWorkflow {
 
     public static final String TYPE = "order_refund_inquiry";
 
-    private final MockOrderAdapter mockOrderAdapter;
+    private final OrderAdapter orderAdapter;
     private final ToolService toolService;
     private final Clock clock;
     private final RefundEligibilityPolicy refundEligibilityPolicy;
@@ -34,21 +33,21 @@ public class OrderRefundInquiryWorkflow implements ExecutableWorkflow {
 
     @Autowired
     public OrderRefundInquiryWorkflow(
-            MockOrderAdapter mockOrderAdapter,
+            OrderAdapter orderAdapter,
             ToolService toolService,
             RefundEligibilityPolicy refundEligibilityPolicy,
             RefundCaseRepository refundCaseRepository,
             AuditService auditService
     ) {
-        this(mockOrderAdapter, toolService, Clock.systemDefaultZone(), refundEligibilityPolicy, refundCaseRepository, auditService);
+        this(orderAdapter, toolService, Clock.systemDefaultZone(), refundEligibilityPolicy, refundCaseRepository, auditService);
     }
 
-    public OrderRefundInquiryWorkflow(MockOrderAdapter mockOrderAdapter, ToolService toolService) {
-        this(mockOrderAdapter, toolService, Clock.systemDefaultZone());
+    public OrderRefundInquiryWorkflow(OrderAdapter orderAdapter, ToolService toolService) {
+        this(orderAdapter, toolService, Clock.systemDefaultZone());
     }
 
-    public OrderRefundInquiryWorkflow(MockOrderAdapter mockOrderAdapter, ToolService toolService, Clock clock) {
-        this(mockOrderAdapter, toolService, clock, new RefundEligibilityPolicy(clock), new RefundCaseRepository() {
+    public OrderRefundInquiryWorkflow(OrderAdapter orderAdapter, ToolService toolService, Clock clock) {
+        this(orderAdapter, toolService, clock, new RefundEligibilityPolicy(clock), new RefundCaseRepository() {
             @Override
             public RefundCase save(RefundCase refundCase) { return refundCase; }
             @Override
@@ -59,14 +58,14 @@ public class OrderRefundInquiryWorkflow implements ExecutableWorkflow {
     }
 
     public OrderRefundInquiryWorkflow(
-            MockOrderAdapter mockOrderAdapter,
+            OrderAdapter orderAdapter,
             ToolService toolService,
             Clock clock,
             RefundEligibilityPolicy refundEligibilityPolicy,
             RefundCaseRepository refundCaseRepository,
             AuditService auditService
     ) {
-        this.mockOrderAdapter = mockOrderAdapter;
+        this.orderAdapter = orderAdapter;
         this.toolService = toolService;
         this.clock = clock;
         this.refundEligibilityPolicy = refundEligibilityPolicy;
@@ -105,24 +104,16 @@ public class OrderRefundInquiryWorkflow implements ExecutableWorkflow {
                     LocalDateTime.now().plusSeconds(30)
             );
             
-            ToolService.ToolExecution<MockOrderAdapter.OrderSnapshot> execution = toolService.execute(
+            ToolService.ToolExecution<OrderSnapshot> execution = toolService.execute(
                     toolCommand,
-                    MockOrderAdapter.OrderSnapshot.class,
-                    () -> mockOrderAdapter.getOrder(command.orderId(), command.orderNo(), command.userId()).orElse(null)
+                    OrderSnapshot.class,
+                    () -> orderAdapter.getOrder(command.orderId(), command.orderNo(), command.userId()).orElse(null)
             );
             
             if (execution.result() == null) {
                 order = Optional.empty();
             } else {
-                order = Optional.of(OrderSnapshot.of(
-                        execution.result().orderId(),
-                        execution.result().orderNo(),
-                        execution.result().userId(),
-                        execution.result().status(),
-                        execution.result().refundable(),
-                        execution.result().paidAmount(),
-                        execution.result().departureTime()
-                ));
+                order = Optional.of(execution.result());
             }
         } catch (RuntimeException ex) {
             context.failStep(query, "ORDER_LOOKUP_FAILED", WorkflowEngine.WorkflowContext.jsonField("message", ex.getMessage()));
@@ -235,27 +226,4 @@ public class OrderRefundInquiryWorkflow implements ExecutableWorkflow {
         return value == null || value.trim().isEmpty();
     }
 
-
-
-    public record OrderSnapshot(
-            Long orderId,
-            String orderNo,
-            Long userId,
-            OrderStatus status,
-            boolean refundable,
-            BigDecimal paidAmount,
-            LocalDateTime departureTime
-    ) {
-        public static OrderSnapshot of(
-                Long orderId,
-                String orderNo,
-                Long userId,
-                OrderStatus status,
-                boolean refundable,
-                BigDecimal paidAmount,
-                LocalDateTime departureTime
-        ) {
-            return new OrderSnapshot(orderId, orderNo, userId, status, refundable, paidAmount, departureTime);
-        }
-    }
 }

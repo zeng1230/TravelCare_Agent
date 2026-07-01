@@ -1,5 +1,7 @@
 package travelcare_agent.agent;
 
+import travelcare_agent.adapter.order.OrderSnapshot;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import travelcare_agent.answerability.AnswerabilityDecision;
@@ -113,7 +115,7 @@ class AgentOrchestratorTest {
 
     @Test
     void handlesRefundInquiryFromMessageThroughWorkflow() {
-        AgentOrchestrator orchestrator = orchestratorWithOrder(new MockOrderAdapter.OrderSnapshot(
+        AgentOrchestrator orchestrator = orchestratorWithOrder(new OrderSnapshot(
                 10L,
                 "ORD-10",
                 1001L,
@@ -137,7 +139,7 @@ class AgentOrchestratorTest {
 
     @Test
     void handlesOrderQueryFromMessageThroughWorkflow() {
-        AgentOrchestrator orchestrator = orchestratorWithOrder(new MockOrderAdapter.OrderSnapshot(
+        AgentOrchestrator orchestrator = orchestratorWithOrder(new OrderSnapshot(
                 11L,
                 "ORD-11",
                 1001L,
@@ -178,7 +180,7 @@ class AgentOrchestratorTest {
     void unanswerableFallbackReplyDoesNotCallModelForKnowledgeAnswer() {
         AgentModelService modelService = org.mockito.Mockito.mock(AgentModelService.class);
         AgentOrchestrator orchestrator = orchestratorWithOrderAndContext(
-                new MockOrderAdapter.OrderSnapshot(
+                new OrderSnapshot(
                         12L,
                         "ORD-12",
                         1001L,
@@ -233,7 +235,7 @@ class AgentOrchestratorTest {
     @Test
     void locksAnswerabilityMetadataAfterRefundPolicyDecision() {
         AgentOrchestrator orchestrator = orchestratorWithOrderAndContext(
-                new MockOrderAdapter.OrderSnapshot(
+                new OrderSnapshot(
                         13L,
                         "ORD-13",
                         1001L,
@@ -273,7 +275,7 @@ class AgentOrchestratorTest {
         assertThat(reply.ragMayOverrideBusinessDecision()).isFalse();
     }
 
-    private static AgentOrchestrator orchestratorWithOrder(MockOrderAdapter.OrderSnapshot order) {
+    private static AgentOrchestrator orchestratorWithOrder(OrderSnapshot order) {
         return orchestratorWithOrderAndContext(order, new travelcare_agent.agent.AgentContext(
                 List.of(),
                 null,
@@ -283,7 +285,7 @@ class AgentOrchestratorTest {
         ), null);
     }
 
-    private static AgentOrchestrator orchestratorWithOrderAndContext(MockOrderAdapter.OrderSnapshot order,
+    private static AgentOrchestrator orchestratorWithOrderAndContext(OrderSnapshot order,
             AgentContext agentContext, AgentModelService agentModelService) {
         ToolCallRepository toolCallRepository = new ToolCallRepository() {
             public ToolCall save(ToolCall call) {

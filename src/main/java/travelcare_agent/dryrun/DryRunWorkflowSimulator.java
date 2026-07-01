@@ -1,7 +1,7 @@
 package travelcare_agent.dryrun;
 
 import org.springframework.stereotype.Component;
-import travelcare_agent.adapter.order.MockOrderAdapter;
+import travelcare_agent.adapter.order.OrderSnapshot;
 import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.policy.RefundEligibilityDecision;
 
@@ -10,7 +10,7 @@ import java.util.Map;
 
 @Component
 public class DryRunWorkflowSimulator {
-    public Simulation simulate(MockOrderAdapter.OrderSnapshot order, RefundEligibilityDecision decision){
+    public Simulation simulate(OrderSnapshot order, RefundEligibilityDecision decision){
         String answer=decision.status()==RefundCaseStatus.ELIGIBLE
                 ? "Order "+order.orderNo()+" is eligible for refund inquiry. Refund amount can be reviewed up to "+order.paidAmount()+"."
                 : "Order "+order.orderNo()+" is not eligible for refund inquiry because "+decision.reason()+".";

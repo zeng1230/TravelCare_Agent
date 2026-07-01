@@ -1,5 +1,7 @@
 package travelcare_agent.eval;
 
+import travelcare_agent.adapter.order.OrderSnapshot;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import travelcare_agent.agent.AgentModelService;
@@ -16,7 +18,6 @@ import travelcare_agent.agentrun.service.AgentRunService;
 import travelcare_agent.enums.OrderStatus;
 import travelcare_agent.policy.RefundEligibilityDecision;
 import travelcare_agent.policy.RefundEligibilityPolicy;
-import travelcare_agent.workflow.workflows.OrderRefundInquiryWorkflow;
 
 import java.math.BigDecimal;
 import java.nio.file.Files;
@@ -103,8 +104,8 @@ class Stage5EvaluationSuiteTest {
         assertThat(markdown).contains("STAGE5-001", "STAGE5-002", "STAGE5-003", "STAGE5-004");
     }
 
-    private static OrderRefundInquiryWorkflow.OrderSnapshot order(String orderNo, boolean refundable, LocalDateTime departureTime) {
-        return new OrderRefundInquiryWorkflow.OrderSnapshot(
+    private static OrderSnapshot order(String orderNo, boolean refundable, LocalDateTime departureTime) {
+        return new OrderSnapshot(
                 1L, orderNo, 1001L, OrderStatus.PAID, refundable, new BigDecimal("100.00"), departureTime
         );
     }

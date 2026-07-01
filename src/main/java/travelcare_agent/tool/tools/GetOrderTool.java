@@ -3,7 +3,8 @@ package travelcare_agent.tool.tools;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
-import travelcare_agent.adapter.order.MockOrderAdapter;
+import travelcare_agent.adapter.order.OrderAdapter;
+import travelcare_agent.adapter.order.OrderSnapshot;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.tool.ToolService;
@@ -20,10 +21,10 @@ public class GetOrderTool {
     private static final String TOOL_NAME = "GetOrderTool";
 
     private final ToolService toolService;
-    private final MockOrderAdapter orderAdapter;
+    private final OrderAdapter orderAdapter;
     private final ObjectMapper objectMapper;
 
-    public GetOrderTool(ToolService toolService, MockOrderAdapter orderAdapter) {
+    public GetOrderTool(ToolService toolService, OrderAdapter orderAdapter) {
         this.toolService = toolService;
         this.orderAdapter = orderAdapter;
         this.objectMapper = new ObjectMapper().findAndRegisterModules();
@@ -46,7 +47,7 @@ public class GetOrderTool {
     }
 
     private GetOrderResult lookup(GetOrderRequest request) {
-        MockOrderAdapter.OrderSnapshot order = orderAdapter.getOrder(request.orderId(), request.orderNo(), request.userId())
+        OrderSnapshot order = orderAdapter.getOrder(request.orderId(), request.orderNo(), request.userId())
                 .orElseThrow(() -> new BusinessException(ResultCode.ORDER_NOT_FOUND));
         return new GetOrderResult(order);
     }
@@ -79,6 +80,6 @@ public class GetOrderTool {
     ) {
     }
 
-    public record GetOrderResult(MockOrderAdapter.OrderSnapshot order) {
+    public record GetOrderResult(OrderSnapshot order) {
     }
 }

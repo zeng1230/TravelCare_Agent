@@ -1,5 +1,7 @@
 package travelcare_agent.workflow;
 
+import travelcare_agent.adapter.order.OrderSnapshot;
+
 import org.junit.jupiter.api.Test;
 import travelcare_agent.audit.AuditService;
 import travelcare_agent.enums.OrderStatus;
@@ -43,7 +45,7 @@ class OrderRefundInquiryWorkflowTest {
 
     @Test
     void respondsWhenPaidRefundableOrderIsMoreThanTwentyFourHoursAway() {
-        Fixture fixture = Fixture.withOrder(new MockOrderAdapter.OrderSnapshot(
+        Fixture fixture = Fixture.withOrder(new OrderSnapshot(
                 10L,
                 "ORD-10",
                 1001L,
@@ -149,7 +151,7 @@ class OrderRefundInquiryWorkflowTest {
 
     @Test
     void respondsIneligibleWhenOrderAlreadyUsed() {
-        Fixture fixture = Fixture.withOrder(new MockOrderAdapter.OrderSnapshot(
+        Fixture fixture = Fixture.withOrder(new OrderSnapshot(
                 10L,
                 "ORD-10",
                 1001L,
@@ -179,7 +181,7 @@ class OrderRefundInquiryWorkflowTest {
 
     @Test
     void needsHumanAndAuditsWhenOrderBelongsToAnotherUser() {
-        Fixture fixture = Fixture.withUnfilteredOrder(new MockOrderAdapter.OrderSnapshot(
+        Fixture fixture = Fixture.withUnfilteredOrder(new OrderSnapshot(
                 10L,
                 "ORD-10",
                 2002L,
@@ -244,14 +246,14 @@ class OrderRefundInquiryWorkflowTest {
             this.engine = engine;
         }
 
-        static Fixture withOrder(MockOrderAdapter.OrderSnapshot order) {
+        static Fixture withOrder(OrderSnapshot order) {
             return create((orderId, orderNo, userId) -> Optional.ofNullable(order)
                     .filter(snapshot -> orderId == null || snapshot.orderId().equals(orderId))
                     .filter(snapshot -> orderNo == null || snapshot.orderNo().equals(orderNo))
                     .filter(snapshot -> snapshot.userId().equals(userId)));
         }
 
-        static Fixture withUnfilteredOrder(MockOrderAdapter.OrderSnapshot order) {
+        static Fixture withUnfilteredOrder(OrderSnapshot order) {
             return create((orderId, orderNo, userId) -> Optional.ofNullable(order)
                     .filter(snapshot -> orderId == null || snapshot.orderId().equals(orderId))
                     .filter(snapshot -> orderNo == null || snapshot.orderNo().equals(orderNo)));

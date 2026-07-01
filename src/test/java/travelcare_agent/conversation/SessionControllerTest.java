@@ -1,5 +1,7 @@
 package travelcare_agent.conversation;
 
+import travelcare_agent.adapter.order.OrderSnapshot;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -176,7 +178,7 @@ class SessionControllerTest {
     }
 
     private static AgentOrchestrator orchestrator(IdempotencyService idempotencyService) {
-        MockOrderAdapter.OrderSnapshot order = new MockOrderAdapter.OrderSnapshot(
+        OrderSnapshot order = new OrderSnapshot(
                 10L,
                 "ORD-10",
                 1001L,

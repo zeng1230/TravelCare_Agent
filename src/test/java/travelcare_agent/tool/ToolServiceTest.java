@@ -2,6 +2,8 @@ package travelcare_agent.tool;
 
 import org.junit.jupiter.api.Test;
 import travelcare_agent.adapter.order.MockOrderAdapter;
+import travelcare_agent.adapter.order.OrderSnapshot;
+import travelcare_agent.adapter.order.SupplierGatewayClientException;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.enums.OrderStatus;
@@ -86,7 +88,7 @@ class ToolServiceTest {
 
     @Test
     void rejectsOrderOwnedByAnotherUserWithoutSuccessfulToolResult() {
-        Fixture fixture = Fixture.withOrder(new MockOrderAdapter.OrderSnapshot(
+        Fixture fixture = Fixture.withOrder(new OrderSnapshot(
                 10L,
                 "ORD-10",
                 2002L,
@@ -119,6 +121,49 @@ class ToolServiceTest {
         assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
         assertThat(toolCall.getResponseJson()).contains("TOOL_TIMEOUT");
         assertThat(toolCall.getReconciliationRequired()).isFalse();
+    }
+
+    @Test
+    void recordsSupplierFailureErrorCodeForReadOnlyAdapterException() {
+        Fixture fixture = Fixture.withSupplierFailure("SUPPLIER_INTERNAL_ERROR");
+
+        assertThatThrownBy(() -> fixture.getOrderTool.execute(request("tool:get_order:20:server-error")))
+                .isInstanceOf(SupplierGatewayClientException.class)
+                .hasMessageContaining("SUPPLIER_INTERNAL_ERROR");
+
+        ToolCall toolCall = fixture.toolCallRepository.only();
+        assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
+        assertThat(toolCall.getLastErrorCode()).isEqualTo("SUPPLIER_INTERNAL_ERROR");
+        assertThat(toolCall.getResponseJson()).contains("SUPPLIER_INTERNAL_ERROR");
+        assertThat(toolCall.getReconciliationRequired()).isFalse();
+    }
+
+    @Test
+    void recordsMalformedSupplierResponseErrorCodeForReadOnlyAdapterException() {
+        Fixture fixture = Fixture.withSupplierFailure("SUPPLIER_MALFORMED_RESPONSE");
+
+        assertThatThrownBy(() -> fixture.getOrderTool.execute(request("tool:get_order:20:malformed")))
+                .isInstanceOf(SupplierGatewayClientException.class)
+                .hasMessageContaining("SUPPLIER_MALFORMED_RESPONSE");
+
+        ToolCall toolCall = fixture.toolCallRepository.only();
+        assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
+        assertThat(toolCall.getLastErrorCode()).isEqualTo("SUPPLIER_MALFORMED_RESPONSE");
+        assertThat(toolCall.getResponseJson()).contains("SUPPLIER_MALFORMED_RESPONSE");
+    }
+
+    @Test
+    void recordsMissingFieldSupplierResponseErrorCodeForReadOnlyAdapterException() {
+        Fixture fixture = Fixture.withSupplierFailure("SUPPLIER_MISSING_FIELD");
+
+        assertThatThrownBy(() -> fixture.getOrderTool.execute(request("tool:get_order:20:missing-field")))
+                .isInstanceOf(SupplierGatewayClientException.class)
+                .hasMessageContaining("SUPPLIER_MISSING_FIELD");
+
+        ToolCall toolCall = fixture.toolCallRepository.only();
+        assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
+        assertThat(toolCall.getLastErrorCode()).isEqualTo("SUPPLIER_MISSING_FIELD");
+        assertThat(toolCall.getResponseJson()).contains("SUPPLIER_MISSING_FIELD");
     }
 
     @Test
@@ -158,8 +203,8 @@ class ToolServiceTest {
         return new GetOrderTool.GetOrderRequest(101L, 20L, 30L, 1001L, orderId, orderNo, idempotencyKey);
     }
 
-    private static MockOrderAdapter.OrderSnapshot order() {
-        return new MockOrderAdapter.OrderSnapshot(
+    private static OrderSnapshot order() {
+        return new OrderSnapshot(
                 10L,
                 "ORD-10",
                 1001L,
@@ -185,7 +230,7 @@ class ToolServiceTest {
             this.getOrderTool = getOrderTool;
         }
 
-        static Fixture withOrder(MockOrderAdapter.OrderSnapshot order) {
+        static Fixture withOrder(OrderSnapshot order) {
             AtomicInteger calls = new AtomicInteger();
             return create((orderId, orderNo, userId) -> {
                 calls.incrementAndGet();
@@ -201,6 +246,14 @@ class ToolServiceTest {
             return create((orderId, orderNo, userId) -> {
                 calls.incrementAndGet();
                 throw new IllegalStateException("adapter timeout");
+            }, calls);
+        }
+
+        static Fixture withSupplierFailure(String errorCode) {
+            AtomicInteger calls = new AtomicInteger();
+            return create((orderId, orderNo, userId) -> {
+                calls.incrementAndGet();
+                throw new SupplierGatewayClientException(errorCode, "supplier failure");
             }, calls);
         }
 

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import travelcare_agent.adapter.order.SupplierGatewayClientException;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.tool.entity.ToolCall;
 import travelcare_agent.tool.repository.ToolCallRepository;
@@ -136,7 +137,7 @@ public class ToolService {
                     ex.getResultCode().code(), Duration.between(startedAt, Instant.now()));
             throw ex;
         } catch (RuntimeException ex) {
-            String errorCode = isTimeout(ex) ? "TOOL_TIMEOUT" : "UNKNOWN_TOOL_ERROR";
+            String errorCode = resolveRuntimeErrorCode(ex);
             if (command.sideEffectingExternalCall() && isTimeout(ex)) {
                 toolCall.unknown(errorJson(errorCode, safeMessage(ex)), errorCode);
             } else {
@@ -197,6 +198,20 @@ public class ToolService {
             current = current.getCause();
         }
         return false;
+    }
+
+    private static String resolveRuntimeErrorCode(RuntimeException ex) {
+        if (isTimeout(ex)) {
+            return "TOOL_TIMEOUT";
+        }
+        Throwable current = ex;
+        while (current != null) {
+            if (current instanceof SupplierGatewayClientException supplierException) {
+                return supplierException.errorCode();
+            }
+            current = current.getCause();
+        }
+        return "UNKNOWN_TOOL_ERROR";
     }
 
     private static String safeMessage(Throwable throwable) {

@@ -1,9 +1,9 @@
 package travelcare_agent.policy;
 
 import org.springframework.stereotype.Component;
+import travelcare_agent.adapter.order.OrderSnapshot;
 import travelcare_agent.enums.OrderStatus;
 import travelcare_agent.enums.RefundCaseStatus;
-import travelcare_agent.workflow.workflows.OrderRefundInquiryWorkflow;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -36,11 +36,11 @@ public class RefundEligibilityPolicy {
         this.traceService = traceService;
     }
 
-    public RefundEligibilityDecision evaluate(OrderRefundInquiryWorkflow.OrderSnapshot order, Long currentUserId) {
+    public RefundEligibilityDecision evaluate(OrderSnapshot order, Long currentUserId) {
         return evaluateAt(order, currentUserId, LocalDateTime.now(clock));
     }
 
-    public RefundEligibilityDecision evaluateAt(OrderRefundInquiryWorkflow.OrderSnapshot order, Long currentUserId,
+    public RefundEligibilityDecision evaluateAt(OrderSnapshot order, Long currentUserId,
             LocalDateTime evaluatedAt) {
         TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
                 : traceService.startSpan(SpanType.POLICY, "refund-eligibility", Map.of("orderNo", order.orderNo()));
@@ -70,7 +70,7 @@ public class RefundEligibilityPolicy {
         }
     }
 
-    private RefundEligibilityDecision evaluateInternal(OrderRefundInquiryWorkflow.OrderSnapshot order, Long currentUserId,
+    private RefundEligibilityDecision evaluateInternal(OrderSnapshot order, Long currentUserId,
             LocalDateTime evaluatedAt) {
         if (currentUserId == null || !currentUserId.equals(order.userId())) {
             return decision(
