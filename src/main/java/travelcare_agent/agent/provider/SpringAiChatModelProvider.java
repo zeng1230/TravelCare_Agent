@@ -36,9 +36,20 @@ import java.util.Map;
 
 public class SpringAiChatModelProvider implements ChatModelProvider {
 
+    /*
+     * Two initialization paths are intentional:
+     * 1. External ChatModel injection path, used by tests and future external ChatModel wiring.
+     *    Credentials are owned by the external ChatModel provider, so this adapter does not
+     *    validate apiKey before calling it.
+     * 2. TravelCare configured path, used when no external ChatModel is supplied. This adapter
+     *    lazily builds one OpenAiApi/OpenAiChatModel from AgentProviderProperties and maps blank
+     *    apiKey to MODEL_API_KEY_MISSING instead of failing during bean creation.
+     */
     private final ChatModel chatModel;
     private final AgentProviderProperties properties;
     private final ObjectMapper objectMapper;
+    private final ConfiguredChatModelFactory configuredChatModelFactory;
+    private volatile ChatModel configuredChatModel;
 
     public SpringAiChatModelProvider(ChatModel chatModel, ObjectMapper objectMapper) {
         this(chatModel, null, objectMapper);
@@ -49,14 +60,20 @@ public class SpringAiChatModelProvider implements ChatModelProvider {
     }
 
     public SpringAiChatModelProvider(ChatModel chatModel, AgentProviderProperties properties, ObjectMapper objectMapper) {
+        this(chatModel, properties, objectMapper, SpringAiChatModelProvider::createConfiguredChatModel);
+    }
+
+    SpringAiChatModelProvider(ChatModel chatModel, AgentProviderProperties properties, ObjectMapper objectMapper,
+            ConfiguredChatModelFactory configuredChatModelFactory) {
         this.chatModel = chatModel;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.configuredChatModelFactory = configuredChatModelFactory;
     }
 
     @Override
     public ModelResponse call(ModelRequest request) {
-        ChatModel modelClient = chatModel == null ? buildConfiguredChatModel(request) : chatModel;
+        ChatModel modelClient = chatModel == null ? configuredChatModel() : chatModel;
         Prompt prompt = new Prompt(toSpringMessages(request.messages()), options(request));
         Instant startedAt = Instant.now();
         try {
@@ -133,6 +150,8 @@ public class SpringAiChatModelProvider implements ChatModelProvider {
         OpenAiChatOptions options = new OpenAiChatOptions();
         options.setModel(request.model());
         options.setTemperature(request.temperature());
+        // Intentionally disable Spring AI function/tool calling. TravelCare tools stay behind
+        // ToolService so idempotency, audit, workflow_steps, trace, and safety boundaries apply.
         options.setFunctions(java.util.Set.of());
         options.setFunctionCallbacks(java.util.List.of());
         return options;
@@ -143,8 +162,8 @@ public class SpringAiChatModelProvider implements ChatModelProvider {
         if (usage == null) {
             return new ModelUsage(null, null, null);
         }
-        return new ModelUsage(toInteger(usage.getPromptTokens()), toInteger(usage.getGenerationTokens()),
-                toInteger(usage.getTotalTokens()));
+        return new ModelUsage(safeInteger(usage.getPromptTokens()), safeInteger(usage.getGenerationTokens()),
+                safeInteger(usage.getTotalTokens()));
     }
 
     private String redactedSummary(
@@ -175,25 +194,52 @@ public class SpringAiChatModelProvider implements ChatModelProvider {
         }
     }
 
-    private ChatModel buildConfiguredChatModel(ModelRequest request) {
+    private ChatModel configuredChatModel() {
+        ChatModel cached = configuredChatModel;
+        if (cached == null) {
+            synchronized (this) {
+                cached = configuredChatModel;
+                if (cached == null) {
+                    cached = buildConfiguredChatModel();
+                    configuredChatModel = cached;
+                }
+            }
+        }
+        return cached;
+    }
+
+    private ChatModel buildConfiguredChatModel() {
+        return buildConfiguredChatModel(properties, configuredChatModelFactory);
+    }
+
+    private static ChatModel buildConfiguredChatModel(
+            AgentProviderProperties properties,
+            ConfiguredChatModelFactory configuredChatModelFactory
+    ) {
         if (properties == null) {
             throw new ModelCallException("MODEL_PROVIDER_CONFIG_INVALID", "Spring AI ChatModel is not configured");
         }
         if (properties.getApiKey() == null || properties.getApiKey().isBlank()) {
             throw new ModelCallException("MODEL_API_KEY_MISSING", "Spring AI API key is missing");
         }
-        int timeoutMs = request.timeoutMs() > 0 ? request.timeoutMs() : properties.getTimeoutMs();
+        String baseUrl = useOpenAiDefaultBaseUrl(properties.getBaseUrl())
+                ? "https://api.openai.com"
+                : stripTrailingSlash(properties.getBaseUrl());
+        return configuredChatModelFactory.create(properties, baseUrl);
+    }
+
+    static ChatModel createConfiguredChatModel(AgentProviderProperties properties, String baseUrl) {
+        int timeoutMs = properties.getTimeoutMs();
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(timeoutMs);
         requestFactory.setReadTimeout(timeoutMs);
         RestClient.Builder restClientBuilder = RestClient.builder().requestFactory(requestFactory);
-        String baseUrl = useOpenAiDefaultBaseUrl(properties.getBaseUrl())
-                ? "https://api.openai.com"
-                : stripTrailingSlash(properties.getBaseUrl());
         OpenAiApi api = new OpenAiApi(baseUrl, properties.getApiKey(), restClientBuilder, WebClient.builder());
         OpenAiChatOptions options = new OpenAiChatOptions();
         options.setModel(properties.getModel());
         options.setTemperature(properties.getTemperature());
+        // Intentionally disable Spring AI function/tool calling. TravelCare tools stay behind
+        // ToolService so idempotency, audit, workflow_steps, trace, and safety boundaries apply.
         options.setFunctions(java.util.Set.of());
         options.setFunctionCallbacks(java.util.List.of());
         return new OpenAiChatModel(api, options);
@@ -206,8 +252,11 @@ public class SpringAiChatModelProvider implements ChatModelProvider {
                 .anyMatch(output -> output != null && output.hasToolCalls());
     }
 
-    private static Integer toInteger(Long value) {
-        return value == null ? null : Math.toIntExact(value);
+    private static Integer safeInteger(Long value) {
+        if (value == null) return null;
+        if (value > Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        if (value < Integer.MIN_VALUE) return Integer.MIN_VALUE;
+        return value.intValue();
     }
 
     private static boolean hasTimeoutCause(Throwable throwable) {
@@ -234,12 +283,17 @@ public class SpringAiChatModelProvider implements ChatModelProvider {
     }
 
     private static boolean useOpenAiDefaultBaseUrl(String baseUrl) {
-        return baseUrl == null || baseUrl.isBlank() || "https://api.deepseek.com".equals(stripTrailingSlash(baseUrl));
+        return baseUrl == null || baseUrl.isBlank();
     }
 
     private static String stripTrailingSlash(String value) {
         if (value == null) return "";
         String trimmed = value.trim();
         return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+    }
+
+    @FunctionalInterface
+    interface ConfiguredChatModelFactory {
+        ChatModel create(AgentProviderProperties properties, String baseUrl);
     }
 }

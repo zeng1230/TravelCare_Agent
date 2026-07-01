@@ -2,6 +2,7 @@ package travelcare_agent.agent.provider;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,12 +18,21 @@ public class ChatModelProviderConfiguration {
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "travelcare.agent", name = "provider", havingValue = "deepseek")
+    @ConditionalOnExpression("'${travelcare.agent.provider:mock}' == 'deepseek' && '${travelcare.agent.deepseek.backend:legacy}' == 'legacy'")
     public DeepSeekChatModelProvider deepSeekChatModelProvider(
             AgentProviderProperties properties,
             ObjectMapper objectMapper
     ) {
         return new DeepSeekChatModelProvider(properties, objectMapper);
+    }
+
+    @Bean
+    @ConditionalOnExpression("'${travelcare.agent.provider:mock}' == 'deepseek' && '${travelcare.agent.deepseek.backend:legacy}' == 'spring-ai'")
+    public DeepSeekSpringAiChatModelProvider deepSeekSpringAiChatModelProvider(
+            AgentProviderProperties properties,
+            ObjectMapper objectMapper
+    ) {
+        return new DeepSeekSpringAiChatModelProvider(properties, objectMapper);
     }
 
     @Bean
@@ -41,10 +51,13 @@ public class ChatModelProviderConfiguration {
             AgentProviderProperties properties,
             MockChatModelProvider mockProvider,
             ObjectProvider<DeepSeekChatModelProvider> deepSeekProvider,
+            ObjectProvider<DeepSeekSpringAiChatModelProvider> deepSeekSpringAiProvider,
             ObjectProvider<SpringAiChatModelProvider> springAiProvider
     ) {
         return switch (properties.getProvider()) {
-            case DEEPSEEK -> deepSeekProvider.getObject();
+            case DEEPSEEK -> properties.getDeepseek().getBackend() == DeepSeekBackendType.SPRING_AI
+                    ? deepSeekSpringAiProvider.getObject()
+                    : deepSeekProvider.getObject();
             case SPRING_AI -> springAiProvider.getObject();
             case MOCK -> mockProvider;
         };

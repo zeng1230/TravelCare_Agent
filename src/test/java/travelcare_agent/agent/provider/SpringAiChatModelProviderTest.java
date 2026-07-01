@@ -19,6 +19,7 @@ import org.springframework.web.client.ResourceAccessException;
 import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -59,6 +60,62 @@ class SpringAiChatModelProviderTest {
         assertThat(summary.path("usage").path("inputTokens").asInt()).isEqualTo(11);
         assertThat(response.rawResponse()).doesNotContain(
                 "rendered prompt", "apiKey", "Authorization", "Bearer", "answerDraft", "private-draft");
+    }
+
+    @Test
+    void configuredPathRejectsBlankApiKey() {
+        AgentProviderProperties properties = properties("", "https://api.deepseek.com");
+        SpringAiChatModelProvider provider = new SpringAiChatModelProvider(properties, objectMapper);
+
+        assertCode(provider, "MODEL_API_KEY_MISSING");
+    }
+
+    @Test
+    void externalChatModelPathDoesNotValidateApiKey() {
+        AgentProviderProperties properties = properties("", "https://api.deepseek.com");
+        CapturingChatModel chatModel = new CapturingChatModel(response("ok", "gpt-test", "stop", null, false));
+        SpringAiChatModelProvider provider = new SpringAiChatModelProvider(chatModel, properties, objectMapper);
+
+        ModelResponse response = provider.call(request(List.of(new ModelMessage("user", "rendered prompt"))));
+
+        assertThat(response.content()).isEqualTo("ok");
+        assertThat(chatModel.prompt.get()).isNotNull();
+    }
+
+    @Test
+    void configuredPathUsesExplicitDeepSeekCompatibleBaseUrl() {
+        AgentProviderProperties properties = properties("test-key", "https://api.deepseek.com");
+        CapturingFactory factory = new CapturingFactory(response("ok", "deepseek-chat", "stop", null, false));
+        SpringAiChatModelProvider provider = new SpringAiChatModelProvider(null, properties, objectMapper, factory);
+
+        provider.call(request(List.of(new ModelMessage("user", "rendered prompt"))));
+
+        assertThat(factory.baseUrl.get()).isEqualTo("https://api.deepseek.com");
+    }
+
+    @Test
+    void configuredPathBuildsChatModelOnlyOnce() {
+        AgentProviderProperties properties = properties("test-key", "https://api.deepseek.com");
+        CapturingFactory factory = new CapturingFactory(response("ok", "deepseek-chat", "stop", null, false));
+        SpringAiChatModelProvider provider = new SpringAiChatModelProvider(null, properties, objectMapper, factory);
+
+        provider.call(request(List.of(new ModelMessage("user", "first prompt"))));
+        provider.call(request(List.of(new ModelMessage("user", "second prompt"))));
+
+        assertThat(factory.builds).hasValue(1);
+    }
+
+    @Test
+    void requestOptionsDisableSpringAiFunctionCalling() {
+        CapturingChatModel chatModel = new CapturingChatModel(response("ok", "gpt-test", "stop", null, false));
+        SpringAiChatModelProvider provider = new SpringAiChatModelProvider(chatModel, objectMapper);
+
+        provider.call(request(List.of(new ModelMessage("user", "rendered prompt"))));
+
+        org.springframework.ai.openai.OpenAiChatOptions options =
+                (org.springframework.ai.openai.OpenAiChatOptions) chatModel.prompt.get().getOptions();
+        assertThat(options.getFunctions()).isEmpty();
+        assertThat(options.getFunctionCallbacks()).isEmpty();
     }
 
     @Test
@@ -124,6 +181,21 @@ class SpringAiChatModelProviderTest {
         assertCode(provider, "MODEL_PROVIDER_CONFIG_INVALID");
     }
 
+    @Test
+    void largeUsageValuesAreSaturatedInsteadOfFailing() {
+        SpringAiChatModelProvider provider = new SpringAiChatModelProvider(new CapturingChatModel(response(
+                "ok", "gpt-test", "stop",
+                new DefaultUsage(((long) Integer.MAX_VALUE) + 10L, ((long) Integer.MAX_VALUE) + 20L,
+                        ((long) Integer.MAX_VALUE) + 30L),
+                false
+        )), objectMapper);
+
+        ModelResponse response = provider.call(request(List.of(new ModelMessage("user", "rendered prompt"))));
+
+        assertThat(response.usage()).isEqualTo(new ModelUsage(
+                Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE));
+    }
+
     private static void assertCode(SpringAiChatModelProvider provider, String expectedCode) {
         assertThatThrownBy(() -> provider.call(request(List.of(new ModelMessage("user", "rendered prompt")))))
                 .isInstanceOf(ModelCallException.class)
@@ -134,6 +206,17 @@ class SpringAiChatModelProviderTest {
     private static ModelRequest request(List<ModelMessage> messages) {
         return new ModelRequest("gpt-4o-mini", "response-generator-v1", messages, 0.2, 1000,
                 Map.of("operation", "RESPONSE_GENERATION", "traceId", "trace-1"));
+    }
+
+    private static AgentProviderProperties properties(String apiKey, String baseUrl) {
+        AgentProviderProperties properties = new AgentProviderProperties();
+        properties.setProvider(AgentProviderType.SPRING_AI);
+        properties.setModel("deepseek-chat");
+        properties.setApiKey(apiKey);
+        properties.setBaseUrl(baseUrl);
+        properties.setTimeoutMs(1000);
+        properties.setTemperature(0.0);
+        return properties;
     }
 
     private static ChatResponse response(String content, String model, String finishReason,
@@ -162,6 +245,23 @@ class SpringAiChatModelProviderTest {
         public ChatResponse call(Prompt prompt) {
             this.prompt.set(prompt);
             return response;
+        }
+    }
+
+    private static class CapturingFactory implements SpringAiChatModelProvider.ConfiguredChatModelFactory {
+        private final ChatResponse response;
+        private final AtomicInteger builds = new AtomicInteger();
+        private final AtomicReference<String> baseUrl = new AtomicReference<>();
+
+        private CapturingFactory(ChatResponse response) {
+            this.response = response;
+        }
+
+        @Override
+        public ChatModel create(AgentProviderProperties properties, String baseUrl) {
+            builds.incrementAndGet();
+            this.baseUrl.set(baseUrl);
+            return new CapturingChatModel(response);
         }
     }
 }

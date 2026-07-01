@@ -14,6 +14,7 @@ public class AgentProviderProperties {
     private String apiKey = "";
     private String baseUrl = "https://api.deepseek.com";
     private Double temperature = 0.0;
+    private DeepSeek deepseek = new DeepSeek();
 
     public AgentProviderType getProvider() {
         return provider;
@@ -69,5 +70,25 @@ public class AgentProviderProperties {
 
     public void setTemperature(Double temperature) {
         this.temperature = temperature;
+    }
+
+    public DeepSeek getDeepseek() {
+        return deepseek;
+    }
+
+    public void setDeepseek(DeepSeek deepseek) {
+        this.deepseek = deepseek == null ? new DeepSeek() : deepseek;
+    }
+
+    public static class DeepSeek {
+        private DeepSeekBackendType backend = DeepSeekBackendType.LEGACY;
+
+        public DeepSeekBackendType getBackend() {
+            return backend;
+        }
+
+        public void setBackend(DeepSeekBackendType backend) {
+            this.backend = backend == null ? DeepSeekBackendType.LEGACY : backend;
+        }
     }
 }

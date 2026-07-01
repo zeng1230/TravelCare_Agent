@@ -13,6 +13,9 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 
+import java.lang.reflect.Method;
+import java.util.Arrays;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ChatModelProviderConfigurationTest {
@@ -38,6 +41,7 @@ class ChatModelProviderConfigurationTest {
         contextRunner
                 .withPropertyValues(
                         "travelcare.agent.provider=deepseek",
+                        "travelcare.agent.deepseek.backend=legacy",
                         "travelcare.agent.api-key=test-key"
                 )
                 .run(context -> {
@@ -48,10 +52,41 @@ class ChatModelProviderConfigurationTest {
     }
 
     @Test
+    void providerDeepseekWithSpringAiBackendSelectsDeepSeekSpringAiProvider() {
+        contextRunner
+                .withUserConfiguration(FakeSpringAiChatModelConfiguration.class)
+                .withPropertyValues(
+                        "travelcare.agent.provider=deepseek",
+                        "travelcare.agent.deepseek.backend=spring-ai",
+                        "travelcare.agent.api-key=",
+                        "travelcare.agent.base-url="
+                )
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context.getBean(ChatModelProvider.class))
+                            .isInstanceOf(DeepSeekSpringAiChatModelProvider.class);
+                });
+    }
+
+    @Test
+    void deepseekSpringAiProductionBeanDoesNotUseGenericChatModelBean() {
+        Method method = Arrays.stream(ChatModelProviderConfiguration.class.getDeclaredMethods())
+                .filter(candidate -> candidate.getName().equals("deepSeekSpringAiChatModelProvider"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(method.getParameterTypes())
+                .containsExactly(AgentProviderProperties.class, ObjectMapper.class);
+    }
+
+    @Test
     void providerSpringAiSelectsSpringAiProvider() {
         contextRunner
                 .withUserConfiguration(FakeSpringAiChatModelConfiguration.class)
-                .withPropertyValues("travelcare.agent.provider=spring-ai")
+                .withPropertyValues(
+                        "travelcare.agent.provider=spring-ai",
+                        "travelcare.agent.base-url=https://api.deepseek.com"
+                )
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).doesNotHaveBean(DeepSeekChatModelProvider.class);

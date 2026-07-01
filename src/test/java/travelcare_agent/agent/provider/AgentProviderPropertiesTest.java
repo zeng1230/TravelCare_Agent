@@ -15,5 +15,6 @@ class AgentProviderPropertiesTest {
         assertThat(properties.getPromptVersion()).isEqualTo("stage10a-default");
         assertThat(properties.getTimeoutMs()).isEqualTo(5000);
         assertThat(properties.getApiKey()).isEmpty();
+        assertThat(properties.getDeepseek().getBackend()).isEqualTo(DeepSeekBackendType.LEGACY);
     }
 }
