@@ -136,6 +136,31 @@ class TravelCareMetricsTest {
         assertThat(registry.get("travelcare.reconciliation.pending").gauge().value()).isEqualTo(3.0);
     }
 
+    @Test
+    void recordsSupplierMetricsWithoutCountingNotFoundAsFailure() {
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        TravelCareMetrics metrics = new TravelCareMetrics(registry);
+
+        metrics.recordSupplierCall("http", "gateway", "success", Duration.ofMillis(5));
+        metrics.recordSupplierCall("http", "gateway", "not_found", Duration.ofMillis(6));
+        metrics.recordSupplierCall("http", "gateway", "timeout", Duration.ofMillis(7));
+        metrics.recordSupplierCall("http", "gateway", "unavailable", Duration.ofMillis(8));
+        metrics.recordSupplierCall("http", "gateway", "invalid_response", Duration.ofMillis(9));
+        metrics.recordSupplierCall("http", "gateway", "bad_request", Duration.ofMillis(10));
+        metrics.recordSupplierCall("http", "gateway", "connection_failed", Duration.ofMillis(11));
+
+        assertThat(registry.find("travelcare.supplier.requests.total").counters()).hasSize(7);
+        assertThat(registry.find("travelcare.supplier.latency").timers().stream()
+                .map(timer -> timer.getId().getTag("outcome")).toList())
+                .containsExactlyInAnyOrder("success", "not_found", "timeout", "unavailable",
+                        "invalid_response", "bad_request", "connection_failed");
+        assertThat(registry.find("travelcare.supplier.failures.total").counters()).hasSize(5);
+        assertThat(registry.find("travelcare.supplier.failures.total").tag("outcome", "not_found").counter()).isNull();
+        assertThat(registry.find("travelcare.supplier.failures.total").tag("outcome", "success").counter()).isNull();
+        assertThat(registry.find("travelcare.supplier.failures.total").tag("outcome", "connection_failed").counter())
+                .isNotNull();
+    }
+
     private static void assertCounter(SimpleMeterRegistry registry, String name, double count) {
         assertThat(registry.get(name).counter().count()).isEqualTo(count);
     }

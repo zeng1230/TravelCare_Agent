@@ -255,6 +255,19 @@ public class TravelCareMetrics {
         counter(meter, Map.of("sourceType", sourceType, "status", status, "resultCode", resultCode));
     }
 
+    public void recordSupplierCall(String adapter, String supplier, String outcome, Duration duration) {
+        Map<String, String> tags = Map.of(
+                "adapter", adapter,
+                "supplier", supplier,
+                "outcome", outcome
+        );
+        counter("travelcare.supplier.requests.total", tags);
+        timer("travelcare.supplier.latency", duration, tags);
+        if (isSupplierFailureOutcome(outcome)) {
+            counter("travelcare.supplier.failures.total", tags);
+        }
+    }
+
     public void gauge(String name, Supplier<Number> supplier) {
         Gauge.builder(name, supplier, value -> value.get().doubleValue()).register(registry);
     }
@@ -271,6 +284,11 @@ public class TravelCareMetrics {
     private void tokenSummary(String name, Integer value, Map<String, String> tags) {
         if (value == null) return;
         DistributionSummary.builder(name).tags(safeTags(tags)).register(registry).record(Math.max(0, value));
+    }
+
+    private static boolean isSupplierFailureOutcome(String outcome) {
+        return Set.of("timeout", "unavailable", "invalid_response", "bad_request", "connection_failed")
+                .contains(outcome);
     }
 
     private static Map<String, String> llmTags(String provider, String model, String mode, String result,

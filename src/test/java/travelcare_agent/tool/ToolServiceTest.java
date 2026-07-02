@@ -3,6 +3,7 @@ package travelcare_agent.tool;
 import org.junit.jupiter.api.Test;
 import travelcare_agent.adapter.order.MockOrderAdapter;
 import travelcare_agent.adapter.order.OrderSnapshot;
+import travelcare_agent.adapter.order.SupplierFailureCode;
 import travelcare_agent.adapter.order.SupplierGatewayClientException;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
@@ -125,36 +126,36 @@ class ToolServiceTest {
 
     @Test
     void recordsSupplierFailureErrorCodeForReadOnlyAdapterException() {
-        Fixture fixture = Fixture.withSupplierFailure("SUPPLIER_INTERNAL_ERROR");
+        Fixture fixture = Fixture.withSupplierFailure(SupplierFailureCode.SUPPLIER_UNAVAILABLE);
 
         assertThatThrownBy(() -> fixture.getOrderTool.execute(request("tool:get_order:20:server-error")))
                 .isInstanceOf(SupplierGatewayClientException.class)
-                .hasMessageContaining("SUPPLIER_INTERNAL_ERROR");
+                .hasMessageContaining("SUPPLIER_UNAVAILABLE");
 
         ToolCall toolCall = fixture.toolCallRepository.only();
         assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
-        assertThat(toolCall.getLastErrorCode()).isEqualTo("SUPPLIER_INTERNAL_ERROR");
-        assertThat(toolCall.getResponseJson()).contains("SUPPLIER_INTERNAL_ERROR");
+        assertThat(toolCall.getLastErrorCode()).isEqualTo("SUPPLIER_UNAVAILABLE");
+        assertThat(toolCall.getResponseJson()).contains("SUPPLIER_UNAVAILABLE");
         assertThat(toolCall.getReconciliationRequired()).isFalse();
     }
 
     @Test
     void recordsMalformedSupplierResponseErrorCodeForReadOnlyAdapterException() {
-        Fixture fixture = Fixture.withSupplierFailure("SUPPLIER_MALFORMED_RESPONSE");
+        Fixture fixture = Fixture.withSupplierFailure(SupplierFailureCode.SUPPLIER_INVALID_RESPONSE);
 
         assertThatThrownBy(() -> fixture.getOrderTool.execute(request("tool:get_order:20:malformed")))
                 .isInstanceOf(SupplierGatewayClientException.class)
-                .hasMessageContaining("SUPPLIER_MALFORMED_RESPONSE");
+                .hasMessageContaining("SUPPLIER_INVALID_RESPONSE");
 
         ToolCall toolCall = fixture.toolCallRepository.only();
         assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
-        assertThat(toolCall.getLastErrorCode()).isEqualTo("SUPPLIER_MALFORMED_RESPONSE");
-        assertThat(toolCall.getResponseJson()).contains("SUPPLIER_MALFORMED_RESPONSE");
+        assertThat(toolCall.getLastErrorCode()).isEqualTo("SUPPLIER_INVALID_RESPONSE");
+        assertThat(toolCall.getResponseJson()).contains("SUPPLIER_INVALID_RESPONSE");
     }
 
     @Test
     void recordsMissingFieldSupplierResponseErrorCodeForReadOnlyAdapterException() {
-        Fixture fixture = Fixture.withSupplierFailure("SUPPLIER_MISSING_FIELD");
+        Fixture fixture = Fixture.withSupplierFailure(SupplierFailureCode.SUPPLIER_MISSING_FIELD);
 
         assertThatThrownBy(() -> fixture.getOrderTool.execute(request("tool:get_order:20:missing-field")))
                 .isInstanceOf(SupplierGatewayClientException.class)
@@ -164,6 +165,29 @@ class ToolServiceTest {
         assertThat(toolCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
         assertThat(toolCall.getLastErrorCode()).isEqualTo("SUPPLIER_MISSING_FIELD");
         assertThat(toolCall.getResponseJson()).contains("SUPPLIER_MISSING_FIELD");
+    }
+
+    @Test
+    void recordsPreciseSupplierTimeoutAndConnectionFailureCodesForReadOnlyAdapterException() {
+        Fixture timeout = Fixture.withSupplierFailure(SupplierFailureCode.SUPPLIER_TIMEOUT);
+
+        assertThatThrownBy(() -> timeout.getOrderTool.execute(request("tool:get_order:20:timeout")))
+                .isInstanceOf(SupplierGatewayClientException.class);
+
+        ToolCall timeoutCall = timeout.toolCallRepository.only();
+        assertThat(timeoutCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
+        assertThat(timeoutCall.getLastErrorCode()).isEqualTo("SUPPLIER_TIMEOUT");
+        assertThat(timeoutCall.getReconciliationRequired()).isFalse();
+
+        Fixture connection = Fixture.withSupplierFailure(SupplierFailureCode.SUPPLIER_CONNECTION_FAILED);
+
+        assertThatThrownBy(() -> connection.getOrderTool.execute(request("tool:get_order:20:connection")))
+                .isInstanceOf(SupplierGatewayClientException.class);
+
+        ToolCall connectionCall = connection.toolCallRepository.only();
+        assertThat(connectionCall.getStatus()).isEqualTo(ToolCallStatus.FAILED);
+        assertThat(connectionCall.getLastErrorCode()).isEqualTo("SUPPLIER_CONNECTION_FAILED");
+        assertThat(connectionCall.getReconciliationRequired()).isFalse();
     }
 
     @Test
@@ -249,11 +273,11 @@ class ToolServiceTest {
             }, calls);
         }
 
-        static Fixture withSupplierFailure(String errorCode) {
+        static Fixture withSupplierFailure(SupplierFailureCode failureCode) {
             AtomicInteger calls = new AtomicInteger();
             return create((orderId, orderNo, userId) -> {
                 calls.incrementAndGet();
-                throw new SupplierGatewayClientException(errorCode, "supplier failure");
+                throw new SupplierGatewayClientException(failureCode, "supplier failure");
             }, calls);
         }
 

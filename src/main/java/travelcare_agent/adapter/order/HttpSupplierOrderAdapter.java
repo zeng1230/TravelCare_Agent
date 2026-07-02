@@ -1,20 +1,27 @@
 package travelcare_agent.adapter.order;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.util.UriComponentsBuilder;
 import travelcare_agent.common.trace.TraceIdFilter;
+import travelcare_agent.observability.TravelCareMetrics;
 import travelcare_agent.trace.TraceContextHolder;
 
 import java.net.SocketTimeoutException;
+import java.net.URI;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
@@ -23,21 +30,31 @@ import java.util.concurrent.TimeoutException;
 @ConditionalOnProperty(name = "travelcare.supplier.mode", havingValue = "http")
 public class HttpSupplierOrderAdapter implements OrderAdapter {
 
+    private static final Logger log = LoggerFactory.getLogger(HttpSupplierOrderAdapter.class);
     private static final String TRACE_ID_HEADER = "X-Trace-Id";
+    private static final String ADAPTER = "http";
+    private static final String SUPPLIER = "gateway";
 
     private final RestClient restClient;
     private final SupplierGatewayProperties properties;
     private final ObjectMapper objectMapper;
+    private final TravelCareMetrics metrics;
 
     @Autowired
-    public HttpSupplierOrderAdapter(RestClient.Builder builder, SupplierGatewayProperties properties) {
-        this(builder.requestFactory(requestFactory(properties)).build(), properties);
+    public HttpSupplierOrderAdapter(RestClient.Builder builder, SupplierGatewayProperties properties,
+                                    @Autowired(required = false) TravelCareMetrics metrics) {
+        this(builder.requestFactory(requestFactory(properties)).build(), properties, metrics);
     }
 
     HttpSupplierOrderAdapter(RestClient restClient, SupplierGatewayProperties properties) {
+        this(restClient, properties, null);
+    }
+
+    HttpSupplierOrderAdapter(RestClient restClient, SupplierGatewayProperties properties, TravelCareMetrics metrics) {
         this.properties = properties;
         this.restClient = restClient;
         this.objectMapper = new ObjectMapper().findAndRegisterModules();
+        this.metrics = metrics;
     }
 
     @Override
@@ -48,7 +65,8 @@ public class HttpSupplierOrderAdapter implements OrderAdapter {
             effectiveOrderNo = "ORD-" + orderId;
         }
         if (effectiveOrderNo == null || effectiveOrderNo.isBlank()) {
-            throw new SupplierGatewayClientException("INVALID_REQUEST", "orderNo is required for supplier gateway lookup");
+            throw new SupplierGatewayClientException(SupplierFailureCode.SUPPLIER_BAD_REQUEST,
+                    "supplier gateway lookup requires order reference");
         }
 
         String url = UriComponentsBuilder.fromHttpUrl(properties.getBaseUrl())
@@ -56,50 +74,103 @@ public class HttpSupplierOrderAdapter implements OrderAdapter {
                 .queryParam("userId", userId)
                 .buildAndExpand(effectiveOrderNo)
                 .toUriString();
+        Instant startedAt = Instant.now();
+        SupplierFailureCode outcome = null;
+        String host = host(properties.getBaseUrl());
+        String orderHash = orderHash(effectiveOrderNo);
         try {
+            log.info("supplier order request traceId={} adapterName={} supplier={} host={} orderHash={}",
+                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash);
             String body = restClient.get()
                     .uri(url)
                     .header(TRACE_ID_HEADER, currentTraceId())
                     .retrieve()
                     .body(String.class);
             OrderSnapshot snapshot = parseAndValidate(body);
+            log.info("supplier order response traceId={} adapterName={} supplier={} host={} orderHash={} outcome={}",
+                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, "success");
             return Optional.of(snapshot);
         } catch (RestClientResponseException ex) {
             if (ex.getStatusCode() == HttpStatus.NOT_FOUND) {
+                outcome = SupplierFailureCode.SUPPLIER_ORDER_NOT_FOUND;
+                log.info("supplier order response traceId={} adapterName={} supplier={} host={} orderHash={} outcome=not_found status={}",
+                        currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, ex.getStatusCode().value());
                 return Optional.empty();
             }
-            String code = supplierErrorCode(ex.getResponseBodyAsString(), "SUPPLIER_HTTP_" + ex.getStatusCode().value());
-            throw new SupplierGatewayClientException(code, "supplier gateway returned " + ex.getStatusCode(), ex);
+            SupplierFailureCode code = httpFailureCode(ex);
+            outcome = code;
+            log.warn("supplier order failure traceId={} adapterName={} supplier={} host={} orderHash={} failureCode={} status={}",
+                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, code.name(), ex.getStatusCode().value());
+            throw new SupplierGatewayClientException(code, "supplier gateway returned status=" + ex.getStatusCode().value()
+                    + " supplier=" + SUPPLIER + " host=" + host + " orderHash=" + orderHash, ex);
         } catch (RestClientException ex) {
             if (isTimeout(ex)) {
-                throw new SupplierGatewayClientException("SUPPLIER_TIMEOUT", "supplier gateway timeout", ex);
+                outcome = SupplierFailureCode.SUPPLIER_TIMEOUT;
+                log.warn("supplier order failure traceId={} adapterName={} supplier={} host={} orderHash={} failureCode={} errorType={}",
+                        currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, outcome.name(), ex.getClass().getSimpleName());
+                throw new SupplierGatewayClientException(outcome, "supplier gateway timeout supplier=" + SUPPLIER
+                        + " host=" + host + " orderHash=" + orderHash, ex);
             }
-            throw new SupplierGatewayClientException("SUPPLIER_CALL_FAILED", "supplier gateway call failed", ex);
+            outcome = SupplierFailureCode.SUPPLIER_CONNECTION_FAILED;
+            log.warn("supplier order failure traceId={} adapterName={} supplier={} host={} orderHash={} failureCode={} errorType={}",
+                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, outcome.name(), ex.getClass().getSimpleName());
+            throw new SupplierGatewayClientException(outcome, "supplier gateway connection failed supplier=" + SUPPLIER
+                    + " host=" + host + " orderHash=" + orderHash, ex);
+        } catch (SupplierGatewayClientException ex) {
+            outcome = ex.failureCode();
+            log.warn("supplier order failure traceId={} adapterName={} supplier={} host={} orderHash={} failureCode={}",
+                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, outcome.name());
+            throw ex;
+        } finally {
+            if (metrics != null) {
+                String metricOutcome = outcome == null ? "success" : outcome.outcome();
+                metrics.recordSupplierCall(ADAPTER, SUPPLIER, metricOutcome, Duration.between(startedAt, Instant.now()));
+            }
         }
     }
 
     private OrderSnapshot parseAndValidate(String body) {
+        JsonNode node;
         try {
-            OrderSnapshot snapshot = objectMapper.readValue(body, OrderSnapshot.class);
-            if (snapshot.orderId() == null || isBlank(snapshot.orderNo()) || snapshot.userId() == null
-                    || snapshot.status() == null || snapshot.paidAmount() == null || snapshot.departureTime() == null) {
-                throw new SupplierGatewayClientException("SUPPLIER_MISSING_FIELD", "supplier response is missing required order fields");
-            }
-            return snapshot;
-        } catch (SupplierGatewayClientException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            throw new SupplierGatewayClientException("SUPPLIER_MALFORMED_RESPONSE", "supplier response is malformed", ex);
+            node = objectMapper.readTree(body);
+        } catch (JsonProcessingException ex) {
+            throw new SupplierGatewayClientException(SupplierFailureCode.SUPPLIER_INVALID_RESPONSE,
+                    "supplier response is invalid JSON", ex);
+        }
+        if (node == null || !node.isObject()) {
+            throw new SupplierGatewayClientException(SupplierFailureCode.SUPPLIER_INVALID_RESPONSE,
+                    "supplier response has invalid structure");
+        }
+        requireField(node, "orderNo");
+        requireField(node, "userId");
+        requireField(node, "status");
+        requireField(node, "refundable");
+        requireField(node, "paidAmount");
+        requireField(node, "departureTime");
+        try {
+            return objectMapper.treeToValue(node, OrderSnapshot.class);
+        } catch (JsonProcessingException | IllegalArgumentException ex) {
+            throw new SupplierGatewayClientException(SupplierFailureCode.SUPPLIER_INVALID_RESPONSE,
+                    "supplier response cannot be mapped to order snapshot", ex);
         }
     }
 
-    private String supplierErrorCode(String body, String fallback) {
-        try {
-            String code = objectMapper.readTree(body).path("code").asText();
-            return code == null || code.isBlank() ? fallback : code;
-        } catch (Exception ex) {
-            return fallback;
+    private static void requireField(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull() || (value.isTextual() && value.asText().isBlank())) {
+            throw new SupplierGatewayClientException(SupplierFailureCode.SUPPLIER_MISSING_FIELD,
+                    "supplier response is missing required order field=" + field);
         }
+    }
+
+    private static SupplierFailureCode httpFailureCode(RestClientResponseException ex) {
+        if (ex.getStatusCode() == HttpStatus.GATEWAY_TIMEOUT) {
+            return SupplierFailureCode.SUPPLIER_TIMEOUT;
+        }
+        if (ex.getStatusCode().is5xxServerError()) {
+            return SupplierFailureCode.SUPPLIER_UNAVAILABLE;
+        }
+        return SupplierFailureCode.SUPPLIER_BAD_REQUEST;
     }
 
     private String currentTraceId() {
@@ -137,6 +208,24 @@ public class HttpSupplierOrderAdapter implements OrderAdapter {
             current = current.getCause();
         }
         return false;
+    }
+
+    private static String host(String baseUrl) {
+        try {
+            return URI.create(baseUrl).getHost();
+        } catch (RuntimeException ex) {
+            return "unknown";
+        }
+    }
+
+    private static String orderHash(String orderNo) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            String value = java.util.HexFormat.of().formatHex(digest.digest(orderNo.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            return value.substring(0, 12);
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            return "unknown";
+        }
     }
 
     private static boolean isBlank(String value) {

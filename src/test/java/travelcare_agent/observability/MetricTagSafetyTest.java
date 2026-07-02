@@ -30,6 +30,7 @@ class MetricTagSafetyTest {
         metrics.llmFailure("deepseek", "deployment/abc/request/1234567890", "real", "MODEL_TIMEOUT",
                 Duration.ofMillis(5), null, null);
         metrics.safetyDecision("BLOCK", "UNSAFE_COMMITMENT", "mock");
+        metrics.recordSupplierCall("http", "gateway", "connection_failed", Duration.ofMillis(5));
 
         for (Meter meter : registry.getMeters()) {
             for (Meter.Id id : java.util.List.of(meter.getId())) {

@@ -201,15 +201,15 @@ public class ToolService {
     }
 
     private static String resolveRuntimeErrorCode(RuntimeException ex) {
-        if (isTimeout(ex)) {
-            return "TOOL_TIMEOUT";
-        }
         Throwable current = ex;
         while (current != null) {
             if (current instanceof SupplierGatewayClientException supplierException) {
                 return supplierException.errorCode();
             }
             current = current.getCause();
+        }
+        if (isTimeout(ex)) {
+            return "TOOL_TIMEOUT";
         }
         return "UNKNOWN_TOOL_ERROR";
     }
