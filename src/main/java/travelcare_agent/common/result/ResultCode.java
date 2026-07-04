@@ -13,6 +13,7 @@ public enum ResultCode {
     WORKFLOW_FAILED("WORKFLOW_FAILED", "Workflow failed"),
     TOOL_CALL_FAILED("TOOL_CALL_FAILED", "Tool call failed"),
     DRY_RUN_NOT_READY("DRY_RUN_NOT_READY", "Dry run snapshots are not ready"),
+    AGENTOPS_DRY_RUN_REQUIRED("AGENTOPS_DRY_RUN_REQUIRED", "AgentOps debug API requires dryRun=true"),
     DEEPSEEK_API_KEY_MISSING("DEEPSEEK_API_KEY_MISSING", "DeepSeek API key is missing"),
     EVALUATION_DATASET_NOT_FOUND("EVALUATION_DATASET_NOT_FOUND", "Evaluation dataset not found"),
     EVALUATION_DATASET_NOT_ACTIVE("EVALUATION_DATASET_NOT_ACTIVE", "Evaluation dataset is not active"),

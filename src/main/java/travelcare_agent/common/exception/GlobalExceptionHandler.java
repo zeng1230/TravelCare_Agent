@@ -65,6 +65,7 @@ public class GlobalExceptionHandler {
     private HttpStatus resolveStatus(ResultCode resultCode) {
         return switch (resultCode) {
             case BAD_REQUEST, VALIDATION_FAILED, IDEMPOTENCY_KEY_CONFLICT, DRY_RUN_NOT_READY,
+                    AGENTOPS_DRY_RUN_REQUIRED,
                     EVALUATION_DATASET_NOT_ACTIVE, EVALUATION_DATASET_NOT_DRAFT, EVALUATION_EMPTY_DATASET,
                     EVALUATION_PROVIDER_NOT_ALLOWED, EVALUATION_PROMPT_STUB_UNKNOWN, EVALUATION_INVALID_EXPECTATION,
                     EVALUATION_BASELINE_PROMOTION_NOT_ALLOWED -> HttpStatus.BAD_REQUEST;

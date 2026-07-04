@@ -27,6 +27,14 @@ import java.util.Optional;
         return Optional.ofNullable(mapper.selectOne(new LambdaQueryWrapper<TraceRun>().eq(TraceRun::getTraceId,id).last("limit 1")));
     }
 
+    public Optional<TraceRun> findLatestBySessionIdAndWorkflowId(Long sid,Long wid){
+        LambdaQueryWrapper<TraceRun> wrapper=new LambdaQueryWrapper<TraceRun>()
+                .eq(TraceRun::getSessionId,sid);
+        if(wid!=null)wrapper.eq(TraceRun::getWorkflowId,wid);
+        wrapper.orderByDesc(TraceRun::getStartedAt).orderByDesc(TraceRun::getId).last("limit 1");
+        return Optional.ofNullable(mapper.selectOne(wrapper));
+    }
+
     public List<TraceRun> findBySessionId(Long sid,long pn,long ps){
         return mapper.selectPage(Page.of(pn,ps,false),new LambdaQueryWrapper<TraceRun>().eq(TraceRun::getSessionId,sid).orderByDesc(TraceRun::getStartedAt).orderByDesc(TraceRun::getId)).getRecords();
     }

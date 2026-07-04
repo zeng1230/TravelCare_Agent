@@ -12,10 +12,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.beans.factory.annotation.Autowired;
 import travelcare_agent.agent.ContextAssembler;
 import travelcare_agent.api.AgentTraceController;
+import travelcare_agent.api.AgentOpsDebugController;
 import travelcare_agent.api.EvaluationController;
 import travelcare_agent.api.HumanReviewController;
 import travelcare_agent.api.SessionController;
 import travelcare_agent.api.WorkflowController;
+import travelcare_agent.agentops.AgentOpsDebugResponse;
+import travelcare_agent.agentops.AgentOpsDebugService;
+import travelcare_agent.agentops.DebugFinalRoute;
 import travelcare_agent.common.exception.GlobalExceptionHandler;
 import travelcare_agent.conversation.entity.Session;
 import travelcare_agent.conversation.repository.InMemorySessionRepository;
@@ -47,6 +51,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         SessionController.class,
         WorkflowController.class,
         AgentTraceController.class,
+        AgentOpsDebugController.class,
         EvaluationController.class,
         HumanReviewController.class
 })
@@ -100,11 +105,31 @@ class SecurityBoundaryWebMvcTest {
         String user = SecurityTestTokenFactory.bearer(1001L, "tenant-a", "USER");
         mvc.perform(get("/api/agent-traces/trace-1").header("Authorization", user))
                 .andExpect(status().isForbidden());
+        mvc.perform(post("/api/agentops/debug/qa")
+                        .header("Authorization", user)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sessionId\":1001,\"question\":\"退款规则是什么？\"}"))
+                .andExpect(status().isForbidden());
         mvc.perform(get("/api/evaluation/runs/1").header("Authorization", user))
                 .andExpect(status().isForbidden());
         mvc.perform(get("/api/human-review/cases").header("Authorization", user))
                 .andExpect(status().isForbidden());
 
+        mvc.perform(post("/api/agentops/debug/qa")
+                        .header("Authorization", SecurityTestTokenFactory.bearer(1L, "tenant-a", "ADMIN"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sessionId\":1001,\"question\":\"退款规则是什么？\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/agentops/debug/qa")
+                        .header("Authorization", SecurityTestTokenFactory.bearer(4004L, "tenant-a", "OPERATOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sessionId\":1001,\"question\":\"退款规则是什么？\"}"))
+                .andExpect(status().isOk());
+        mvc.perform(post("/api/agentops/debug/qa")
+                        .header("Authorization", SecurityTestTokenFactory.bearer(3003L, "tenant-a", "EVALUATOR"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sessionId\":1001,\"question\":\"退款规则是什么？\"}"))
+                .andExpect(status().isOk());
         mvc.perform(get("/api/evaluation/runs/1")
                         .header("Authorization", SecurityTestTokenFactory.bearer(3003L, "tenant-a", "EVALUATOR")))
                 .andExpect(status().isOk());
@@ -114,6 +139,14 @@ class SecurityBoundaryWebMvcTest {
         mvc.perform(get("/api/agent-traces/trace-1")
                         .header("Authorization", SecurityTestTokenFactory.bearer(1L, "tenant-a", "ADMIN")))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void agentOpsDebugRequiresAuthentication() throws Exception {
+        mvc.perform(post("/api/agentops/debug/qa")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sessionId\":1001,\"question\":\"退款规则是什么？\"}"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -169,6 +202,21 @@ class SecurityBoundaryWebMvcTest {
         }
         @Bean DiagnosticDryRunService diagnosticDryRunService() { return mock(DiagnosticDryRunService.class); }
         @Bean TraceDiffService traceDiffService() { return mock(TraceDiffService.class); }
+        @Bean AgentOpsDebugService agentOpsDebugService() {
+            AgentOpsDebugService service = mock(AgentOpsDebugService.class);
+            when(service.debug(org.mockito.ArgumentMatchers.any()))
+                    .thenReturn(new AgentOpsDebugResponse(
+                            1001L, null, null, "DRY_RUN", "mock", "mock", "stage10a-default",
+                            "退款规则是什么？",
+                            new AgentOpsDebugResponse.RetrievalDebug(java.util.List.of(), java.util.List.of(), java.util.List.of()),
+                            new AgentOpsDebugResponse.AnswerabilityDebug("ANSWERABLE", "SUFFICIENT_CONTEXT"),
+                            new AgentOpsDebugResponse.SafetyDebug("ALLOW", "SAFE", java.util.List.of()),
+                            new AgentOpsDebugResponse.SupplierGatewayDebug(false, "dry-run mode"),
+                            java.util.List.of(), DebugFinalRoute.ALLOW,
+                            new AgentOpsDebugResponse.HumanHandoffRecommendation(false, "Automated answer allowed"),
+                            java.util.List.of()));
+            return service;
+        }
         @Bean EvaluationDatasetService evaluationDatasetService() { return mock(EvaluationDatasetService.class); }
         @Bean EvaluationRunnerService evaluationRunnerService() {
             EvaluationRunnerService service = mock(EvaluationRunnerService.class);

@@ -12,6 +12,8 @@ public interface TraceRunRepository {
 
     Optional<TraceRun> findByTraceId(String traceId);
 
+    Optional<TraceRun> findLatestBySessionIdAndWorkflowId(Long sessionId, Long workflowId);
+
     List<TraceRun> findBySessionId(Long sessionId, long pageNo, long pageSize);
 
     long countBySessionId(Long sessionId);
