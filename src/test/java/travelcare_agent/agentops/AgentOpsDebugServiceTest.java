@@ -81,6 +81,7 @@ class AgentOpsDebugServiceTest {
         AgentOpsDebugResponse response = service.debug(new AgentOpsDebugRequest(10L, 20L, "订单 ORD-1001 可以退款吗？", true));
 
         assertThat(response.traceId()).isEqualTo("trace-1");
+        assertThat(response.evidenceMode()).isEqualTo(DebugEvidenceMode.TRACE_REPLAY);
         assertThat(response.debugMode()).isEqualTo("DRY_RUN");
         assertThat(response.modelProvider()).isEqualTo("mock");
         assertThat(response.promptVersion()).isEqualTo("stage10a-default");
@@ -118,12 +119,13 @@ class AgentOpsDebugServiceTest {
         AgentOpsDebugResponse response = service.debug(new AgentOpsDebugRequest(10L, null, "退款规则是什么？", null));
 
         assertThat(response.traceId()).isNull();
+        assertThat(response.evidenceMode()).isEqualTo(DebugEvidenceMode.CURRENT_DIAGNOSTIC);
         assertThat(response.providerMode()).isEqualTo("mock");
         assertThat(response.retrieval().candidates()).singleElement()
                 .satisfies(candidate -> assertThat(candidate.sourceUri()).isEqualTo("https://example.com/current?ok=1"));
         assertThat(response.answerability().decision()).isEqualTo("ANSWERABLE");
         assertThat(response.finalRoute()).isEqualTo(DebugFinalRoute.ALLOW);
-        assertThat(response.diagnosticWarnings()).contains("NO_EXISTING_TRACE_FOUND");
+        assertThat(response.diagnosticWarnings()).contains("NO_EXISTING_TRACE_FOUND_CURRENT_STATE_DIAGNOSTIC_ONLY");
         verify(retrievalService).retrieve(any(RetrievalQuery.class));
     }
 

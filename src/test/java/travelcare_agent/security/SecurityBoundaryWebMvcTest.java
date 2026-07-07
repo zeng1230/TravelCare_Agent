@@ -19,6 +19,7 @@ import travelcare_agent.api.SessionController;
 import travelcare_agent.api.WorkflowController;
 import travelcare_agent.agentops.AgentOpsDebugResponse;
 import travelcare_agent.agentops.AgentOpsDebugService;
+import travelcare_agent.agentops.DebugEvidenceMode;
 import travelcare_agent.agentops.DebugFinalRoute;
 import travelcare_agent.common.exception.GlobalExceptionHandler;
 import travelcare_agent.conversation.entity.Session;
@@ -206,7 +207,8 @@ class SecurityBoundaryWebMvcTest {
             AgentOpsDebugService service = mock(AgentOpsDebugService.class);
             when(service.debug(org.mockito.ArgumentMatchers.any()))
                     .thenReturn(new AgentOpsDebugResponse(
-                            1001L, null, null, "DRY_RUN", "mock", "mock", "stage10a-default",
+                            1001L, null, null, "DRY_RUN", DebugEvidenceMode.CURRENT_DIAGNOSTIC,
+                            "mock", "mock", "stage10a-default",
                             "退款规则是什么？",
                             new AgentOpsDebugResponse.RetrievalDebug(java.util.List.of(), java.util.List.of(), java.util.List.of()),
                             new AgentOpsDebugResponse.AnswerabilityDebug("ANSWERABLE", "SUFFICIENT_CONTEXT"),

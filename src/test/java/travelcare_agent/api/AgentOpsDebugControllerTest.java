@@ -22,7 +22,8 @@ class AgentOpsDebugControllerTest {
     void returnsDebugExplanationUsingStandardResultEnvelope() throws Exception {
         AgentOpsDebugService service = mock(AgentOpsDebugService.class);
         when(service.debug(any())).thenReturn(new AgentOpsDebugResponse(
-                10L, 20L, "trace-1", "DRY_RUN", "mock", "mock", "stage10a-default",
+                10L, 20L, "trace-1", "DRY_RUN", DebugEvidenceMode.TRACE_REPLAY,
+                "mock", "mock", "stage10a-default",
                 "订单 ORD-1001 可以退款吗？",
                 new AgentOpsDebugResponse.RetrievalDebug(List.of(), List.of(), List.of()),
                 new AgentOpsDebugResponse.AnswerabilityDebug("ANSWERABLE", "SUFFICIENT_CONTEXT"),
@@ -44,6 +45,7 @@ class AgentOpsDebugControllerTest {
                 .andExpect(jsonPath("$.code").value("SUCCESS"))
                 .andExpect(jsonPath("$.message").value("ok"))
                 .andExpect(jsonPath("$.data.traceId").value("trace-1"))
+                .andExpect(jsonPath("$.data.evidenceMode").value("TRACE_REPLAY"))
                 .andExpect(jsonPath("$.data.finalRoute").value("ALLOW"));
     }
 

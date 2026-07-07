@@ -7,6 +7,7 @@ public record AgentOpsDebugResponse(
         Long workflowId,
         String traceId,
         String debugMode,
+        DebugEvidenceMode evidenceMode,
         String providerMode,
         String modelProvider,
         String promptVersion,

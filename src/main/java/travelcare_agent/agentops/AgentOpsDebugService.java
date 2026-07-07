@@ -121,7 +121,7 @@ public class AgentOpsDebugService {
         }
         return new AgentOpsDebugResponse(
                 request.sessionId(), run.getWorkflowId() == null ? request.workflowId() : run.getWorkflowId(),
-                run.getTraceId(), DEBUG_MODE, providerMode(run),
+                run.getTraceId(), DEBUG_MODE, DebugEvidenceMode.TRACE_REPLAY, providerMode(run),
                 firstNonBlank(diagnostics.provider(), run.getProvider(), "mock"),
                 firstNonBlank(diagnostics.promptVersion(), run.getPromptVersion(), promptVersion()),
                 safeText(request.question()),
@@ -132,7 +132,7 @@ public class AgentOpsDebugService {
 
     private AgentOpsDebugResponse inMemoryDiagnostic(AgentOpsDebugRequest request, Session session) {
         List<String> warnings = new ArrayList<>();
-        warnings.add("NO_EXISTING_TRACE_FOUND");
+        warnings.add("NO_EXISTING_TRACE_FOUND_CURRENT_STATE_DIAGNOSTIC_ONLY");
         List<RetrievalSnippet> snippets = retrievalService.retrieve(
                 new RetrievalQuery(request.sessionId(), session.getUserId(), request.question(), null, 5));
         AnswerabilityDecision decision = answerabilityService.assess(new AnswerabilityRequest(
@@ -154,7 +154,7 @@ public class AgentOpsDebugService {
                 new AgentOpsDebugResponse.SafetyDebug("ALLOW", "NO_MODEL_OUTPUT_IN_DRY_RUN", List.of());
         DebugFinalRoute route = mapFinalRoute(safety.decision(), status, requiredAction, false);
         return new AgentOpsDebugResponse(
-                request.sessionId(), request.workflowId(), null, DEBUG_MODE,
+                request.sessionId(), request.workflowId(), null, DEBUG_MODE, DebugEvidenceMode.CURRENT_DIAGNOSTIC,
                 providerProperties == null || providerProperties.getProvider() == null
                         ? "mock" : providerProperties.getProvider().name().toLowerCase(Locale.ROOT),
                 "mock", promptVersion(), safeText(request.question()),
