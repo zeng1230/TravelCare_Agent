@@ -2,7 +2,6 @@ package travelcare_agent.human;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
 import travelcare_agent.audit.AuditService;
 import travelcare_agent.conversation.service.SessionEventService;
 import travelcare_agent.enums.HumanReviewCaseStatus;
@@ -10,6 +9,8 @@ import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.enums.SessionEventRole;
 import travelcare_agent.enums.WorkflowStatus;
 import travelcare_agent.human.entity.HumanReviewCase;
+import travelcare_agent.human.packet.HumanHandoffContextPacket;
+import travelcare_agent.human.packet.HumanHandoffContextPacketBuilder;
 import travelcare_agent.human.repository.InMemoryHumanReviewCaseRepository;
 import travelcare_agent.human.service.HumanReviewService;
 import travelcare_agent.refund.entity.RefundCase;
@@ -18,7 +19,6 @@ import travelcare_agent.workflow.entity.Workflow;
 import travelcare_agent.workflow.repository.InMemoryWorkflowRepository;
 
 import java.math.BigDecimal;
-import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,7 +47,15 @@ class HumanReviewServiceTest {
                 eventService,
                 auditService,
                 workflowRepository,
-                refundCaseRepository
+                refundCaseRepository,
+                new HumanHandoffContextPacketBuilder(
+                        new travelcare_agent.conversation.repository.InMemorySessionEventRepository(),
+                        workflowRepository,
+                        new travelcare_agent.workflow.repository.InMemoryWorkflowStepRepository(),
+                        refundCaseRepository,
+                        emptyTraceRuns(),
+                        mock(travelcare_agent.trace.TraceQueryService.class),
+                        new travelcare_agent.trace.RedactionService())
         );
     }
 
@@ -65,12 +73,31 @@ class HumanReviewServiceTest {
         assertThat(hrCase.getStatus()).isEqualTo(HumanReviewCaseStatus.OPEN);
         assertThat(hrCase.getPriority()).isEqualTo("HIGH");
         assertThat(hrCase.getReasonCode()).isEqualTo("PAID_TIMEOUT");
-        assertThat(hrCase.getEvidenceJson()).isEqualTo("{\"some\":\"evidence\"}");
+        assertThat(hrCase.getEvidenceJson()).contains("\"packetVersion\":\"PR-3A-v1\"");
+        assertThat(hrCase.getEvidenceJson()).contains("\"packetMode\":\"MATERIALIZED\"");
 
         verify(auditService).recordOperator(
                 eq(100L), eq(200L), eq("CREATE"), eq("HUMAN_REVIEW_CASE"),
                 eq(hrCase.getId()), eq("SYSTEM"), eq("system"), anyString(), anyString()
         );
+    }
+
+    @Test
+    void getCasePacketParsesStoredEvidenceJson() {
+        HumanReviewCase hrCase = humanReviewService.createCase(
+                100L, 200L, 300L,
+                "REFUND_REVIEW", "HIGH", "ORDER_LOOKUP_FAILED", "{}"
+        );
+
+        HumanHandoffContextPacket packet = humanReviewService.getContextPacket(hrCase.getId());
+
+        assertThat(packet.packetVersion()).isEqualTo("PR-3A-v1");
+        assertThat(packet.sessionId()).isEqualTo(100L);
+        assertThat(packet.workflowId()).isEqualTo(200L);
+        assertThat(packet.handoffReason().reasonCode()).isEqualTo("ORDER_LOOKUP_FAILED");
+        assertThat(packet.recommendedNextSteps().steps())
+                .extracting(HumanHandoffContextPacket.RecommendedStep::action)
+                .contains("CHECK_SUPPLIER_STATUS");
     }
 
     @Test
@@ -176,5 +203,12 @@ class HumanReviewServiceTest {
         Optional<RefundCase> updatedRefundCase = refundCaseRepository.findById(300L);
         assertThat(updatedRefundCase).isPresent();
         assertThat(updatedRefundCase.get().getStatus()).isEqualTo(RefundCaseStatus.INELIGIBLE);
+    }
+
+    private static travelcare_agent.trace.repository.TraceRunRepository emptyTraceRuns() {
+        travelcare_agent.trace.repository.TraceRunRepository repository =
+                mock(travelcare_agent.trace.repository.TraceRunRepository.class);
+        when(repository.findLatestBySessionIdAndWorkflowId(any(), any())).thenReturn(Optional.empty());
+        return repository;
     }
 }

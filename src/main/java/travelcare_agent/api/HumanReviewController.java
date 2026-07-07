@@ -23,18 +23,20 @@ public class HumanReviewController {
     }
 
     @GetMapping
-    public Result<List<HumanReviewCase>> listOpenCases() {
-        return Result.success(humanReviewService.listOpenCases());
+    public Result<List<HumanReviewCaseResponse>> listOpenCases() {
+        return Result.success(humanReviewService.listOpenCases().stream()
+                .map(this::response)
+                .toList());
     }
 
     @GetMapping("/{caseId}")
-    public Result<HumanReviewCase> getCase(@PathVariable Long caseId) {
-        return Result.success(humanReviewService.getCase(caseId)
-                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Case not found")));
+    public Result<HumanReviewCaseResponse> getCase(@PathVariable Long caseId) {
+        return Result.success(response(humanReviewService.getCase(caseId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Case not found"))));
     }
 
     @PostMapping("/{caseId}/assign")
-    public Result<HumanReviewCase> assignCase(
+    public Result<HumanReviewCaseResponse> assignCase(
             @PathVariable Long caseId,
             @RequestBody AssignRequest request
     ) {
@@ -42,11 +44,11 @@ public class HumanReviewController {
         if (operatorId == null || operatorId.trim().isEmpty()) {
             return Result.fail(ResultCode.VALIDATION_FAILED, "operator_id is required");
         }
-        return Result.success(humanReviewService.assignCase(caseId, operatorId));
+        return Result.success(response(humanReviewService.assignCase(caseId, operatorId)));
     }
 
     @PostMapping("/{caseId}/resolve")
-    public Result<HumanReviewCase> resolveCase(
+    public Result<HumanReviewCaseResponse> resolveCase(
             @PathVariable Long caseId,
             @RequestBody ResolveRequest request
     ) {
@@ -61,7 +63,11 @@ public class HumanReviewController {
             return Result.fail(ResultCode.VALIDATION_FAILED, "resolution is required");
         }
 
-        return Result.success(humanReviewService.resolveCase(caseId, resolution, resolutionNote, operatorId));
+        return Result.success(response(humanReviewService.resolveCase(caseId, resolution, resolutionNote, operatorId)));
+    }
+
+    private HumanReviewCaseResponse response(HumanReviewCase hrCase) {
+        return HumanReviewCaseResponse.from(hrCase, humanReviewService.contextPacket(hrCase));
     }
 
     public record AssignRequest(

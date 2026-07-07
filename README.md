@@ -267,6 +267,8 @@ GET  /api/agent-traces/{traceId}/diffs/{dryRunTraceId}
 POST /api/agentops/debug/qa
 ```
 
+Human Handoff Context Packet details: [`docs/pr-3a-human-handoff-context-packet.md`](docs/pr-3a-human-handoff-context-packet.md).
+
 AgentOps Debug API details: [`docs/pr-3b-agentops-debug-api.md`](docs/pr-3b-agentops-debug-api.md).
 
 ### Evaluation

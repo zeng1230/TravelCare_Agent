@@ -13,6 +13,7 @@ import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.conversation.service.SessionEventService;
 import travelcare_agent.enums.HumanReviewCaseStatus;
 import travelcare_agent.human.entity.HumanReviewCase;
+import travelcare_agent.human.packet.HumanHandoffContextPacketBuilder;
 import travelcare_agent.human.repository.InMemoryHumanReviewCaseRepository;
 import travelcare_agent.human.service.HumanReviewService;
 import travelcare_agent.refund.repository.InMemoryRefundCaseRepository;
@@ -20,6 +21,7 @@ import travelcare_agent.workflow.repository.InMemoryWorkflowRepository;
 
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -43,7 +45,15 @@ class HumanReviewControllerTest {
         auditService = mock(AuditService.class);
         workflowRepo = new InMemoryWorkflowRepository();
         refundRepo = new InMemoryRefundCaseRepository();
-        humanReviewService = new HumanReviewService(hrRepo, eventService, auditService, workflowRepo, refundRepo);
+        humanReviewService = new HumanReviewService(hrRepo, eventService, auditService, workflowRepo, refundRepo,
+                new HumanHandoffContextPacketBuilder(
+                        new travelcare_agent.conversation.repository.InMemorySessionEventRepository(),
+                        workflowRepo,
+                        new travelcare_agent.workflow.repository.InMemoryWorkflowStepRepository(),
+                        refundRepo,
+                        emptyTraceRuns(),
+                        mock(travelcare_agent.trace.TraceQueryService.class),
+                        new travelcare_agent.trace.RedactionService()));
 
         mockMvc = MockMvcBuilders.standaloneSetup(new HumanReviewController(humanReviewService))
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -71,7 +81,9 @@ class HumanReviewControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(ResultCode.SUCCESS.code()))
                 .andExpect(jsonPath("$.data.id").value(hrCase.getId().toString()))
-                .andExpect(jsonPath("$.data.status").value(HumanReviewCaseStatus.OPEN.name()));
+                .andExpect(jsonPath("$.data.status").value(HumanReviewCaseStatus.OPEN.name()))
+                .andExpect(jsonPath("$.data.contextPacket.packetVersion").value("PR-3A-v1"))
+                .andExpect(jsonPath("$.data.contextPacket.sessionId").value(100));
     }
 
     @Test
@@ -106,5 +118,13 @@ class HumanReviewControllerTest {
                 .andExpect(jsonPath("$.data.status").value(HumanReviewCaseStatus.RESOLVED.name()))
                 .andExpect(jsonPath("$.data.resolution").value("APPROVED"))
                 .andExpect(jsonPath("$.data.resolutionNote").value("Approved manually."));
+    }
+
+    private static travelcare_agent.trace.repository.TraceRunRepository emptyTraceRuns() {
+        travelcare_agent.trace.repository.TraceRunRepository repository =
+                mock(travelcare_agent.trace.repository.TraceRunRepository.class);
+        when(repository.findLatestBySessionIdAndWorkflowId(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Optional.empty());
+        return repository;
     }
 }

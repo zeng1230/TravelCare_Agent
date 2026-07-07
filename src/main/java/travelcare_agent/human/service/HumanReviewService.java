@@ -9,6 +9,8 @@ import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.enums.SessionEventRole;
 import travelcare_agent.enums.WorkflowStatus;
 import travelcare_agent.human.entity.HumanReviewCase;
+import travelcare_agent.human.packet.HumanHandoffContextPacket;
+import travelcare_agent.human.packet.HumanHandoffContextPacketBuilder;
 import travelcare_agent.human.repository.HumanReviewCaseRepository;
 import travelcare_agent.refund.entity.RefundCase;
 import travelcare_agent.refund.repository.RefundCaseRepository;
@@ -34,6 +36,7 @@ public class HumanReviewService {
     private final WorkflowRepository workflowRepository;
     private final RefundCaseRepository refundCaseRepository;
     private final TraceService traceService;
+    private final HumanHandoffContextPacketBuilder contextPacketBuilder;
 
     @org.springframework.beans.factory.annotation.Autowired
     public HumanReviewService(
@@ -42,7 +45,8 @@ public class HumanReviewService {
             AuditService auditService,
             WorkflowRepository workflowRepository,
             RefundCaseRepository refundCaseRepository,
-            TraceService traceService
+            TraceService traceService,
+            HumanHandoffContextPacketBuilder contextPacketBuilder
     ) {
         this.repository = repository;
         this.eventService = eventService;
@@ -50,11 +54,34 @@ public class HumanReviewService {
         this.workflowRepository = workflowRepository;
         this.refundCaseRepository = refundCaseRepository;
         this.traceService = traceService;
+        this.contextPacketBuilder = contextPacketBuilder;
+    }
+
+    public HumanReviewService(
+            HumanReviewCaseRepository repository,
+            SessionEventService eventService,
+            AuditService auditService,
+            WorkflowRepository workflowRepository,
+            RefundCaseRepository refundCaseRepository,
+            TraceService traceService
+    ) {
+        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, traceService, null);
+    }
+
+    public HumanReviewService(
+            HumanReviewCaseRepository repository,
+            SessionEventService eventService,
+            AuditService auditService,
+            WorkflowRepository workflowRepository,
+            RefundCaseRepository refundCaseRepository,
+            HumanHandoffContextPacketBuilder contextPacketBuilder
+    ) {
+        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null, contextPacketBuilder);
     }
 
     public HumanReviewService(HumanReviewCaseRepository repository, SessionEventService eventService,
                               AuditService auditService, WorkflowRepository workflowRepository, RefundCaseRepository refundCaseRepository) {
-        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null);
+        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null, null);
     }
 
     @Transactional
@@ -81,7 +108,7 @@ public class HumanReviewService {
         hrCase.setStatus(HumanReviewCaseStatus.OPEN);
         hrCase.setPriority(priority);
         hrCase.setReasonCode(reasonCode);
-        hrCase.setEvidenceJson(evidenceJson == null ? "{}" : evidenceJson);
+        hrCase.setEvidenceJson(contextPacketJson(sessionId, workflowId, refundCaseId, caseType, priority, reasonCode, evidenceJson));
         hrCase.setCreatedAt(LocalDateTime.now());
         hrCase.setUpdatedAt(LocalDateTime.now());
 
@@ -201,7 +228,29 @@ public class HumanReviewService {
         return repository.findById(caseId);
     }
 
+    public HumanHandoffContextPacket getContextPacket(Long caseId) {
+        HumanReviewCase hrCase = repository.findById(caseId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review case not found: " + caseId));
+        return contextPacket(hrCase);
+    }
+
+    public HumanHandoffContextPacket contextPacket(HumanReviewCase hrCase) {
+        if (contextPacketBuilder == null) {
+            return null;
+        }
+        return contextPacketBuilder.fromStoredEvidence(hrCase);
+    }
+
     public Optional<HumanReviewCase> findByWorkflowId(Long workflowId) {
         return repository.findByWorkflowId(workflowId);
+    }
+
+    private String contextPacketJson(Long sessionId, Long workflowId, Long refundCaseId, String caseType,
+            String priority, String reasonCode, String evidenceJson) {
+        if (contextPacketBuilder == null) {
+            return evidenceJson == null ? "{}" : evidenceJson;
+        }
+        return contextPacketBuilder.buildJson(new HumanHandoffContextPacketBuilder.Request(
+                sessionId, workflowId, refundCaseId, caseType, priority, reasonCode, evidenceJson));
     }
 }
