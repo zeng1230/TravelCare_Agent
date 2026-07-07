@@ -3,6 +3,7 @@ package travelcare_agent.evaluation.scoring;
 import com.fasterxml.jackson.databind.JsonNode;
 import travelcare_agent.evaluation.entity.*;
 import travelcare_agent.dryrun.*;
+import travelcare_agent.human.packet.HumanHandoffContextPacket;
 
 import java.time.Clock;
 import java.util.*;
@@ -21,6 +22,10 @@ public class EvaluationScoringContext {
     public String answerabilityStatus, answerabilityReasonCode, requiredAction;
     public JsonNode citations, rejectedCitationCandidates, answerabilityDecisionSnapshot, citationSummarySnapshot;
     public Boolean businessDecisionLocked, ragMayExplainBusinessDecision, ragMayOverrideBusinessDecision, fallbackUsed;
+    public String safetyDecision, safetyReasonCode, supplierFailureCode, leakageCheckText;
+    public List<String> safetyRiskFlags = List.of();
+    public Boolean supplierGatewayParticipated, providerFallbackUsed;
+    public HumanHandoffContextPacket handoffPacket;
 
     public static Builder builder() {
         return new Builder();
@@ -197,6 +202,46 @@ public class EvaluationScoringContext {
 
         public Builder fallbackUsed(Boolean v) {
             c.fallbackUsed = v;
+            return this;
+        }
+
+        public Builder safetyDecision(String v) {
+            c.safetyDecision = v;
+            return this;
+        }
+
+        public Builder safetyReasonCode(String v) {
+            c.safetyReasonCode = v;
+            return this;
+        }
+
+        public Builder safetyRiskFlags(List<String> v) {
+            c.safetyRiskFlags = v == null ? List.of() : v;
+            return this;
+        }
+
+        public Builder supplierGatewayParticipated(Boolean v) {
+            c.supplierGatewayParticipated = v;
+            return this;
+        }
+
+        public Builder supplierFailureCode(String v) {
+            c.supplierFailureCode = v;
+            return this;
+        }
+
+        public Builder providerFallbackUsed(Boolean v) {
+            c.providerFallbackUsed = v;
+            return this;
+        }
+
+        public Builder handoffPacket(HumanHandoffContextPacket v) {
+            c.handoffPacket = v;
+            return this;
+        }
+
+        public Builder leakageCheckText(String v) {
+            c.leakageCheckText = v;
             return this;
         }
 

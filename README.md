@@ -271,6 +271,8 @@ Human Handoff Context Packet details: [`docs/pr-3a-human-handoff-context-packet.
 
 AgentOps Debug API details: [`docs/pr-3b-agentops-debug-api.md`](docs/pr-3b-agentops-debug-api.md).
 
+Safety & RAG Quality Evaluation Pack details: [`docs/pr-3c-safety-rag-quality-evaluation-pack.md`](docs/pr-3c-safety-rag-quality-evaluation-pack.md).
+
 ### Evaluation
 
 ```http

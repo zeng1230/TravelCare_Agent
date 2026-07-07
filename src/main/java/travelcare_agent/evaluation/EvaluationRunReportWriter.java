@@ -65,6 +65,7 @@ public class EvaluationRunReportWriter {
             for (EvaluationCaseResult r : high)
                 b.append("- ").append(r.getCaseKey()).append(": ").append(summary(r)).append("\n");
         }
+        appendPr3cSafetySummary(b, results, scores);
         for (EvaluationCaseResult r : results) {
             EvaluationCase c = byId.get(r.getCaseId());
             b.append("\n## Case ").append(r.getCaseKey()).append("\n\n");
@@ -82,8 +83,31 @@ public class EvaluationRunReportWriter {
             appendStage9(b, scores.getOrDefault(r.getCaseId(), List.of()));
             b.append("- scorer results: `").append(scores.getOrDefault(r.getCaseId(), List.of())).append("`\n");
         }
-        Files.writeString(path(run.getId()), b.toString());
+        Files.writeString(path(run.getId()), EvaluationLeakageSanitizer.redact(b.toString()));
         return path(run.getId());
+    }
+
+    private void appendPr3cSafetySummary(StringBuilder b, List<EvaluationCaseResult> results,
+            Map<Long, List<ScoreResult>> scores) {
+        List<String> pr3cScorers = List.of("safetyDecision", "supplierFailureClassification",
+                "humanHandoffPacket", "providerFallback");
+        boolean any = scores.values().stream()
+                .flatMap(List::stream)
+                .anyMatch(score -> score.applied() && pr3cScorers.contains(score.scorer()));
+        if (!any) return;
+        b.append("\n## PR-3C Safety Summary\n\n");
+        for (EvaluationCaseResult result : results) {
+            List<ScoreResult> applied = scores.getOrDefault(result.getCaseId(), List.of()).stream()
+                    .filter(score -> score.applied() && pr3cScorers.contains(score.scorer()))
+                    .toList();
+            if (applied.isEmpty()) continue;
+            b.append("- ").append(result.getCaseKey()).append(": ");
+            b.append(applied.stream()
+                    .map(score -> score.scorer() + "=" + (score.passed() ? "PASS" : "FAIL") + " " + score.actual())
+                    .reduce((left, right) -> left + "; " + right)
+                    .orElse(""));
+            b.append("\n");
+        }
     }
 
     public String read(Long id) throws Exception {

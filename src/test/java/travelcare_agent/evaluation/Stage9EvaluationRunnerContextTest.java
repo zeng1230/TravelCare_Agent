@@ -76,10 +76,78 @@ class Stage9EvaluationRunnerContextTest {
         assertThat(context.rejectedCitationCandidates().get(0).path("chunkId").asLong()).isEqualTo(501L);
     }
 
+    @Test
+    void runnerContextExtractsPr3cSafetySupplierAndProviderFallbackFields() throws Exception {
+        TraceRun dryRun = new TraceRun();
+        dryRun.setId(45L);
+        dryRun.setTraceId("dry-3c");
+        TraceRunRepository traceRuns = mock(TraceRunRepository.class);
+        when(traceRuns.findByTraceId("dry-3c")).thenReturn(Optional.of(dryRun));
+        EvaluationRunnerService service = new EvaluationRunnerService(
+                mock(EvaluationDatasetRepository.class), mock(EvaluationCaseRepository.class),
+                mock(EvaluationRunRepository.class), mock(EvaluationCaseResultRepository.class),
+                traceRuns, mock(DryRunReadinessChecker.class), mock(DiagnosticDryRunService.class),
+                mock(TraceQueryService.class), mock(TraceDiffService.class), List.of(),
+                new EvaluationPromptStubRegistry(), mock(EvaluationSideEffectGuard.class),
+                mock(EvaluationRunReportWriter.class), json,
+                Clock.fixed(Instant.parse("2026-06-15T00:00:00Z"), ZoneOffset.UTC));
+
+        EvaluationRun run = new EvaluationRun();
+        run.setPromptStubVersion("stage8-default");
+        run.setProviderMode("mock");
+        EvaluationCase evaluationCase = new EvaluationCase();
+        evaluationCase.setId(10L);
+        evaluationCase.setSourceTraceId(9L);
+        evaluationCase.setExpectationJson("{}");
+        TraceQueryService.TraceDetail detail = new TraceQueryService.TraceDetail(new TraceRun(), List.of(
+                span("TOOL", "GetOrderTool", "FAILED", "SUPPLIER_TIMEOUT"),
+                span("FALLBACK", "model-provider-fallback", "SUCCEEDED", null)
+        ), List.of(event("FALLBACK", "model-provider-fallback")), List.of(
+                snapshot("MODEL_SAFETY_DECISION", """
+                        {"safetyDecision":"BLOCK","reasonCode":"AUTHORITATIVE_DECISION_CONFLICT",
+                         "riskFlags":[{"code":"REFUND_CONFLICT","severity":"CRITICAL"}]}
+                        """),
+                snapshot("FINAL_OUTPUT", """
+                        {"answer":"fallback","fallbackUsed":true}
+                        """)
+        ));
+
+        Method method = EvaluationRunnerService.class.getDeclaredMethod("context", EvaluationRun.class,
+                EvaluationCase.class, DryRunResult.class, TraceQueryService.TraceDetail.class, SideEffectCheckResult.class);
+        method.setAccessible(true);
+        EvaluationScoringContext context = (EvaluationScoringContext) method.invoke(service, run, evaluationCase,
+                DryRunResult.succeeded("source", "dry-3c", null), detail,
+                new SideEffectCheckResult(true, Map.of(), Map.of(), null));
+
+        assertThat(context.safetyDecision).isEqualTo("BLOCK");
+        assertThat(context.safetyReasonCode).isEqualTo("AUTHORITATIVE_DECISION_CONFLICT");
+        assertThat(context.safetyRiskFlags).contains("REFUND_CONFLICT");
+        assertThat(context.supplierGatewayParticipated).isTrue();
+        assertThat(context.supplierFailureCode).isEqualTo("SUPPLIER_TIMEOUT");
+        assertThat(context.providerFallbackUsed).isTrue();
+        assertThat(context.leakageCheckText).contains("MODEL_SAFETY_DECISION").doesNotContain("fallback");
+    }
+
     private TraceSnapshot snapshot(String type, String payload) {
         TraceSnapshot snapshot = new TraceSnapshot();
         snapshot.setSnapshotType(type);
         snapshot.setPayloadJson(payload);
         return snapshot;
+    }
+
+    private TraceSpan span(String spanType, String name, String status, String errorCode) {
+        TraceSpan span = new TraceSpan();
+        span.setSpanType(spanType);
+        span.setName(name);
+        span.setStatus(status);
+        span.setErrorCode(errorCode);
+        return span;
+    }
+
+    private travelcare_agent.trace.entity.TraceEvent event(String eventType, String name) {
+        travelcare_agent.trace.entity.TraceEvent event = new travelcare_agent.trace.entity.TraceEvent();
+        event.setEventType(eventType);
+        event.setName(name);
+        return event;
     }
 }

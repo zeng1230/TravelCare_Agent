@@ -10,6 +10,7 @@ import travelcare_agent.dryrun.*;
 import travelcare_agent.evaluation.entity.*;
 import travelcare_agent.evaluation.repository.*;
 import travelcare_agent.evaluation.scoring.*;
+import travelcare_agent.human.packet.HumanHandoffContextPacketBuilder;
 import travelcare_agent.trace.*;
 import travelcare_agent.trace.entity.*;
 import travelcare_agent.trace.repository.TraceRunRepository;
@@ -33,6 +34,7 @@ public class EvaluationRunnerService {
     private final EvaluationSideEffectGuard sideEffects;
     private final EvaluationRunReportWriter reports;
     private final BaselineComparisonService comparisons;
+    private final HumanHandoffContextPacketBuilder handoffPackets;
     private final ObjectMapper json;
     private final Clock clock;
 
@@ -40,28 +42,30 @@ public class EvaluationRunnerService {
     public EvaluationRunnerService(EvaluationDatasetRepository d, EvaluationCaseRepository c, EvaluationRunRepository r,
                                    EvaluationCaseResultRepository cr, TraceRunRepository tr, DryRunReadinessChecker rd, DiagnosticDryRunService dr,
                                    TraceQueryService tq, TraceDiffService df, List<EvaluationScorer> s, EvaluationPromptStubRegistry st,
-                                   EvaluationSideEffectGuard se, EvaluationRunReportWriter rw, BaselineComparisonService bc, ObjectMapper om) {
-        this(d, c, r, cr, tr, rd, dr, tq, df, s, st, se, rw, bc, om, Clock.systemDefaultZone());
+                                   EvaluationSideEffectGuard se, EvaluationRunReportWriter rw, BaselineComparisonService bc,
+                                   @Autowired(required = false) HumanHandoffContextPacketBuilder hp, ObjectMapper om) {
+        this(d, c, r, cr, tr, rd, dr, tq, df, s, st, se, rw, bc, hp, om, Clock.systemDefaultZone());
     }
 
     EvaluationRunnerService(EvaluationDatasetRepository d, EvaluationCaseRepository c, EvaluationRunRepository r,
                             EvaluationCaseResultRepository cr, TraceRunRepository tr, DryRunReadinessChecker rd, DiagnosticDryRunService dr,
                             TraceQueryService tq, TraceDiffService df, List<EvaluationScorer> s, EvaluationPromptStubRegistry st,
                             EvaluationSideEffectGuard se, EvaluationRunReportWriter rw, ObjectMapper om) {
-        this(d, c, r, cr, tr, rd, dr, tq, df, s, st, se, rw, null, om, Clock.systemDefaultZone());
+        this(d, c, r, cr, tr, rd, dr, tq, df, s, st, se, rw, null, null, om, Clock.systemDefaultZone());
     }
 
     EvaluationRunnerService(EvaluationDatasetRepository d, EvaluationCaseRepository c, EvaluationRunRepository r,
                             EvaluationCaseResultRepository cr, TraceRunRepository tr, DryRunReadinessChecker rd, DiagnosticDryRunService dr,
                             TraceQueryService tq, TraceDiffService df, List<EvaluationScorer> s, EvaluationPromptStubRegistry st,
                             EvaluationSideEffectGuard se, EvaluationRunReportWriter rw, ObjectMapper om, Clock clock) {
-        this(d, c, r, cr, tr, rd, dr, tq, df, s, st, se, rw, null, om, clock);
+        this(d, c, r, cr, tr, rd, dr, tq, df, s, st, se, rw, null, null, om, clock);
     }
 
     EvaluationRunnerService(EvaluationDatasetRepository d, EvaluationCaseRepository c, EvaluationRunRepository r,
                             EvaluationCaseResultRepository cr, TraceRunRepository tr, DryRunReadinessChecker rd, DiagnosticDryRunService dr,
                             TraceQueryService tq, TraceDiffService df, List<EvaluationScorer> s, EvaluationPromptStubRegistry st,
-                            EvaluationSideEffectGuard se, EvaluationRunReportWriter rw, BaselineComparisonService bc, ObjectMapper om, Clock clock) {
+                            EvaluationSideEffectGuard se, EvaluationRunReportWriter rw, BaselineComparisonService bc,
+                            HumanHandoffContextPacketBuilder hp, ObjectMapper om, Clock clock) {
         datasets = d;
         cases = c;
         runs = r;
@@ -76,8 +80,17 @@ public class EvaluationRunnerService {
         sideEffects = se;
         reports = rw;
         comparisons = bc;
+        handoffPackets = hp;
         json = om;
         this.clock = clock;
+    }
+
+    EvaluationRunnerService(EvaluationDatasetRepository d, EvaluationCaseRepository c, EvaluationRunRepository r,
+                            EvaluationCaseResultRepository cr, TraceRunRepository tr, DryRunReadinessChecker rd, DiagnosticDryRunService dr,
+                            TraceQueryService tq, TraceDiffService df, List<EvaluationScorer> s, EvaluationPromptStubRegistry st,
+                            EvaluationSideEffectGuard se, EvaluationRunReportWriter rw, BaselineComparisonService bc,
+                            ObjectMapper om, Clock clock) {
+        this(d, c, r, cr, tr, rd, dr, tq, df, s, st, se, rw, bc, null, om, clock);
     }
 
     public EvaluationRun start(Long datasetId, String provider, String stub) {
@@ -170,7 +183,8 @@ public class EvaluationRunnerService {
             out.setDiffId(dr.diffId());
             out.setRiskLevel(dr.riskLevel());
             TraceQueryService.TraceDetail detail = traces.get(dr.dryRunTraceId());
-            EvaluationScoringContext ctx = context(run, c, dr, detail, sideEffects.compare(before));
+            TraceQueryService.TraceDetail sourceDetail = traces.get(source.getTraceId());
+            EvaluationScoringContext ctx = context(run, c, dr, detail, sourceDetail, source, sideEffects.compare(before));
             List<ScoreResult> scoreResults = new ArrayList<>();
             for (EvaluationScorer scorer : scorers) {
                 try {
@@ -201,6 +215,12 @@ public class EvaluationRunnerService {
     }
 
     private EvaluationScoringContext context(EvaluationRun run, EvaluationCase c, DryRunResult dr, TraceQueryService.TraceDetail d, SideEffectCheckResult se) throws Exception {
+        return context(run, c, dr, d, null, null, se);
+    }
+
+    private EvaluationScoringContext context(EvaluationRun run, EvaluationCase c, DryRunResult dr,
+            TraceQueryService.TraceDetail d, TraceQueryService.TraceDetail sourceDetail, TraceRun sourceRun,
+            SideEffectCheckResult se) throws Exception {
         EvaluationScoringContext x = new EvaluationScoringContext();
         x.run = run;
         x.evaluationCase = c;
@@ -226,6 +246,8 @@ public class EvaluationRunnerService {
         x.workflowStatus = snapshotText(d, "WORKFLOW_PATH", "status");
         x.output = snapshotText(d, "FINAL_OUTPUT", "answer");
         applyStage9Context(x, d);
+        if (sourceDetail != null) applyPr3cContext(x, sourceDetail, snapshotJson(sourceDetail, "FINAL_OUTPUT"));
+        buildHandoffPacket(x, sourceRun);
         return x;
     }
 
@@ -247,6 +269,59 @@ public class EvaluationRunnerService {
         }
         if (finalOutput != null && finalOutput.has("fallbackUsed"))
             x.fallbackUsed = finalOutput.path("fallbackUsed").asBoolean(false);
+        applyPr3cContext(x, d, finalOutput);
+    }
+
+    private void applyPr3cContext(EvaluationScoringContext x, TraceQueryService.TraceDetail d, JsonNode finalOutput) throws Exception {
+        JsonNode safety = snapshotJson(d, "MODEL_SAFETY_DECISION");
+        if (safety != null) {
+            x.safetyDecision = text(safety, "safetyDecision");
+            x.safetyReasonCode = text(safety, "reasonCode");
+            x.safetyRiskFlags = riskFlags(safety.path("riskFlags"));
+        }
+        List<String> supplierFailures = d.spans().stream()
+                .map(TraceSpan::getErrorCode)
+                .filter(code -> code != null && code.startsWith("SUPPLIER_"))
+                .toList();
+        if (x.supplierFailureCode == null) {
+            x.supplierFailureCode = supplierFailures.stream().findFirst().orElse(null);
+        }
+        boolean participated = d.spans().stream()
+                .anyMatch(span -> "TOOL".equals(span.getSpanType()) && "GetOrderTool".equals(span.getName()))
+                || x.supplierFailureCode != null;
+        x.supplierGatewayParticipated = Boolean.TRUE.equals(x.supplierGatewayParticipated) || participated;
+        boolean fallbackSignal = d.events().stream().anyMatch(event -> "FALLBACK".equals(event.getEventType()))
+                || d.spans().stream().anyMatch(span -> "FALLBACK".equals(span.getSpanType()));
+        x.providerFallbackUsed = Boolean.TRUE.equals(x.providerFallbackUsed) || fallbackSignal;
+        List<String> diagnostics = new ArrayList<>();
+        d.snapshots().forEach(snapshot -> diagnostics.add(snapshot.getSnapshotType()));
+        d.spans().stream().map(TraceSpan::getErrorCode).filter(Objects::nonNull).forEach(diagnostics::add);
+        d.events().stream().map(TraceEvent::getEventType).filter(Objects::nonNull).forEach(diagnostics::add);
+        x.leakageCheckText = String.join("\n", diagnostics);
+    }
+
+    private void buildHandoffPacket(EvaluationScoringContext x, TraceRun sourceRun) {
+        if (handoffPackets == null || sourceRun == null || sourceRun.getWorkflowId() == null) return;
+        try {
+            x.handoffPacket = handoffPackets.build(new HumanHandoffContextPacketBuilder.Request(
+                    sourceRun.getSessionId(), sourceRun.getWorkflowId(), null, "REFUND_REVIEW", "HIGH",
+                    x.supplierFailureCode == null ? "NEED_HUMAN" : x.supplierFailureCode, "{}"));
+        } catch (RuntimeException ex) {
+            x.handoffPacket = null;
+        }
+    }
+
+    private static List<String> riskFlags(JsonNode flags) {
+        if (flags == null || !flags.isArray()) return List.of();
+        List<String> values = new ArrayList<>();
+        for (JsonNode flag : flags) {
+            if (flag.isTextual()) values.add(flag.asText());
+            else {
+                JsonNode code = flag.get("code");
+                if (code != null && !code.isNull()) values.add(code.asText());
+            }
+        }
+        return values;
     }
 
     private String snapshotText(TraceQueryService.TraceDetail d, String type, String field) {
