@@ -21,9 +21,6 @@ import travelcare_agent.workflow.entity.WorkflowStep;
 import travelcare_agent.workflow.repository.WorkflowRepository;
 import travelcare_agent.workflow.repository.WorkflowStepRepository;
 
-import java.net.URI;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -419,39 +416,7 @@ public class HumanHandoffContextPacketBuilder {
     }
 
     private String sanitizeSourceUri(String value) {
-        if (value == null || value.isBlank()) {
-            return value;
-        }
-        try {
-            URI uri = URI.create(value);
-            String query = sanitizeQuery(uri.getRawQuery());
-            return new URI(uri.getScheme(), uri.getRawAuthority(), uri.getRawPath(), query, null).toString();
-        } catch (Exception ex) {
-            return safeText(value);
-        }
-    }
-
-    private String sanitizeQuery(String rawQuery) {
-        if (rawQuery == null || rawQuery.isBlank()) {
-            return null;
-        }
-        List<String> kept = new ArrayList<>();
-        for (String pair : rawQuery.split("&")) {
-            String key = pair;
-            String value = "";
-            int eq = pair.indexOf('=');
-            if (eq >= 0) {
-                key = pair.substring(0, eq);
-                value = pair.substring(eq + 1);
-            }
-            String normalized = key.toLowerCase(Locale.ROOT);
-            if (normalized.contains("token") || normalized.contains("secret") || normalized.contains("key")
-                    || normalized.contains("signature") || normalized.contains("authorization")) {
-                continue;
-            }
-            kept.add(key + (eq >= 0 ? "=" + URLEncoder.encode(value, StandardCharsets.UTF_8) : ""));
-        }
-        return kept.isEmpty() ? null : String.join("&", kept);
+        return redactionService.sanitizeSourceUri(value);
     }
 
     private boolean isSupplierFailure(String value) {
