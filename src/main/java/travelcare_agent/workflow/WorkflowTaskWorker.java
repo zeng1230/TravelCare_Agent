@@ -483,10 +483,6 @@ public class WorkflowTaskWorker {
     }
 
     private static String safeLogMessage(String value) {
-        if (value == null) return "";
-        String sanitized = value
-                .replaceAll("(?i)Bearer\\s+[A-Za-z0-9._~+/-]+=*", "[REDACTED]")
-                .replaceAll("(?i)(authorization|api[_-]?key|provider[_-]?secret|secret|token)\\s*[:=]\\s*[^\\s,;\\\"}]+", "$1=[REDACTED]");
-        return sanitized.length() > 160 ? sanitized.substring(0, 160) : sanitized;
+        return RedactionBoundary.sanitizeLogField(value, 160);
     }
 }

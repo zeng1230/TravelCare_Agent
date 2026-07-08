@@ -56,7 +56,7 @@ class HumanHandoffContextPacketBuilderTest {
         InMemoryRefundCaseRepository refunds = new InMemoryRefundCaseRepository();
         RefundCase refund = RefundCase.create(1001L, 1001L, 20L, RefundCaseStatus.NEED_HUMAN,
                 new BigDecimal("188.00"), "order ownership could not be verified",
-                "{\"decision\":\"NEED_HUMAN\",\"checks\":{\"ownership\":\"FAIL\"}}");
+                "{\"decision\":\"NEED_HUMAN\",\"checks\":{\"ownership\":\"FAIL\"},\"apiKey\":\"sk-private\"}");
         refund.setId(30L);
         refunds.save(refund);
 
@@ -97,6 +97,7 @@ class HumanHandoffContextPacketBuilderTest {
         assertThat(packet.customerGoal().summary())
                 .isEqualTo("Customer wants to check whether order ORD-1001 can be refunded.");
         assertThat(packet.customerGoal().latestUserMessage()).contains("[REDACTED]");
+        assertThat(packet.refundRuleDecision().policyResultJson()).doesNotContain("sk-private");
         assertThat(packet.verifiedOrderFacts().orderNo()).isEqualTo("ORD-1001");
         assertThat(packet.refundRuleDecision().status()).isEqualTo("NEED_HUMAN");
         assertThat(packet.ragEvidence().acceptedCitations()).singleElement()

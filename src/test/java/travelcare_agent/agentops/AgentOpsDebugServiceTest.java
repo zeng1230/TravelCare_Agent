@@ -50,8 +50,8 @@ class AgentOpsDebugServiceTest {
                 List.of(
                         snapshot(TraceSnapshotType.RETRIEVAL_SUMMARY.name(), """
                                 {"results":[{"retrievalRunId":"ret-1","documentId":2001,"chunkId":1001,
-                                "title":"Refund SOP","sourceUri":"https://example.com/sop?token=abc&version=1#secret",
-                                "sourceAnchor":"section-2","policyVersion":"pv-7","effectiveTime":"2026-07-01T00:00:00",
+                                "title":"Refund SOP user@example.com","sourceUri":"https://example.com/sop?token=abc&version=1#secret",
+                                "sourceAnchor":"section-2 rawPrompt=hidden","policyVersion":"pv-7","effectiveTime":"2026-07-01T00:00:00",
                                 "effectiveFrom":"2026-01-01T00:00:00","effectiveTo":"2026-12-31T00:00:00","score":1.0}]}
                                 """),
                         snapshot(TraceSnapshotType.ANSWERABILITY_DECISION.name(), """
@@ -88,11 +88,13 @@ class AgentOpsDebugServiceTest {
         assertThat(response.retrieval().candidates()).singleElement().satisfies(candidate -> {
             assertThat(candidate.documentId()).isEqualTo(2001L);
             assertThat(candidate.chunkId()).isEqualTo(1001L);
-            assertThat(candidate.sourceAnchor()).isEqualTo("section-2");
+            assertThat(candidate.title()).doesNotContain("user@example.com");
+            assertThat(candidate.sourceAnchor()).doesNotContain("rawPrompt", "hidden");
             assertThat(candidate.policyVersion()).isEqualTo("pv-7");
             assertThat(candidate.effectiveTime()).isEqualTo("2026-07-01T00:00:00");
             assertThat(candidate.sourceUri()).isEqualTo("https://example.com/sop?version=1");
         });
+        assertThat(response.question()).doesNotContain("13812345678");
         assertThat(response.retrieval().acceptedCitations()).singleElement()
                 .satisfies(citation -> assertThat(citation.sourceUri()).isEqualTo("https://example.com/sop?version=1"));
         assertThat(response.retrieval().rejectedCitations()).singleElement()

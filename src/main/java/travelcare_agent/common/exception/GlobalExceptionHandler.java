@@ -30,16 +30,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Result<Void>> handleBusinessException(BusinessException ex) {
         return ResponseEntity.status(resolveStatus(ex.getResultCode()))
-                .body(Result.fail(ex.getResultCode(), ex.getMessage()));
+                .body(Result.fail(ex.getResultCode(), sanitize(ex.getMessage())));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Result<Void>> handleValidationException(MethodArgumentNotValidException ex) {
         String message = ex.getBindingResult().getFieldErrors().stream()
                 .findFirst()
-                .map(error -> error.getField() + " " + error.getDefaultMessage())
+                .map(error -> redactionService.safeFieldName(error.getField()) + " " + error.getDefaultMessage())
                 .orElse(ResultCode.VALIDATION_FAILED.message());
-        return ResponseEntity.badRequest().body(Result.fail(ResultCode.VALIDATION_FAILED, message));
+        return ResponseEntity.badRequest().body(Result.fail(ResultCode.VALIDATION_FAILED, sanitize(message)));
     }
 
     @ExceptionHandler(AuthenticationException.class)

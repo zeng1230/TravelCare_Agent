@@ -7,17 +7,17 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import travelcare_agent.trace.RedactionService;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
-import java.util.regex.Pattern;
 
 @Component
 public class TravelCareMetrics {
@@ -26,18 +26,18 @@ public class TravelCareMetrics {
             "traceid", "prompt", "token", "secret"
     );
     private static final Set<String> ALLOWED_MODELS = Set.of("mock-stage10a", "deepseek-chat", "unknown");
-    private static final Pattern UUID = Pattern.compile("(?i).*\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b.*");
-    private static final Pattern LONG_NUMBER = Pattern.compile(".*\\b\\d{8,}\\b.*");
-    private static final Pattern BEARER = Pattern.compile("(?i).*Bearer\\s+[A-Za-z0-9._~+/-]+=*.*");
-    private static final Pattern JWT = Pattern.compile(".*eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+.*");
-    private static final Pattern EMAIL = Pattern.compile("(?i).*[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}.*");
-    private static final Pattern PHONE = Pattern.compile(".*(?<!\\d)1[3-9]\\d{9}(?!\\d).*");
-    private static final Pattern ORDER_NO = Pattern.compile("(?i).*\\bORD[-_]?\\d+\\b.*");
 
     private final MeterRegistry registry;
+    private final RedactionService redactionService;
 
     public TravelCareMetrics(MeterRegistry registry) {
+        this(registry, new RedactionService());
+    }
+
+    @Autowired
+    public TravelCareMetrics(MeterRegistry registry, RedactionService redactionService) {
         this.registry = registry;
+        this.redactionService = redactionService == null ? new RedactionService() : redactionService;
     }
 
     public void workflowStarted(String workflowType, String currentStep) {
@@ -310,7 +310,7 @@ public class TravelCareMetrics {
         return "unknown";
     }
 
-    private static Tags safeTags(Map<String, String> tags) {
+    private Tags safeTags(Map<String, String> tags) {
         List<Tag> safe = new ArrayList<>();
         tags.forEach((key, value) -> {
             if (key == null || forbiddenKey(key)) return;
@@ -319,25 +319,12 @@ public class TravelCareMetrics {
         return Tags.of(safe);
     }
 
-    private static boolean forbiddenKey(String key) {
-        String normalized = key.replace("_", "").replace("-", "").toLowerCase(Locale.ROOT);
-        return FORBIDDEN_TAG_KEYS.stream().anyMatch(normalized::contains);
+    private boolean forbiddenKey(String key) {
+        return redactionService.forbiddenMetricTagKey(key)
+                || FORBIDDEN_TAG_KEYS.stream().anyMatch(key.replace("_", "").replace("-", "").toLowerCase(java.util.Locale.ROOT)::contains);
     }
 
-    private static String safeValue(String value) {
-        if (value == null || value.isBlank()) return "unknown";
-        String trimmed = value.trim();
-        String lower = trimmed.replace("_", "").replace("-", "").toLowerCase(Locale.ROOT);
-        if (FORBIDDEN_TAG_KEYS.stream().anyMatch(lower::contains)
-                || UUID.matcher(trimmed).matches()
-                || LONG_NUMBER.matcher(trimmed).matches()
-                || BEARER.matcher(trimmed).matches()
-                || JWT.matcher(trimmed).matches()
-                || EMAIL.matcher(trimmed).matches()
-                || PHONE.matcher(trimmed).matches()
-                || ORDER_NO.matcher(trimmed).matches()) {
-            return "REDACTED";
-        }
-        return trimmed.length() > 64 ? "REDACTED" : trimmed;
+    private String safeValue(String value) {
+        return redactionService.safeMetricTagValue(value);
     }
 }

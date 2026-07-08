@@ -2,6 +2,7 @@ package travelcare_agent.trace;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
@@ -20,16 +21,26 @@ public class TraceQueryService {
     private final TraceRunRepository runs; private final TraceSpanRepository spans;
     private final TraceEventRepository events; private final TraceSnapshotRepository snapshots;
     private final ObjectMapper objectMapper;
+    private final RedactionService redactionService;
 
     public TraceQueryService(TraceRunRepository runs, TraceSpanRepository spans, TraceEventRepository events,
             TraceSnapshotRepository snapshots, ObjectMapper objectMapper) {
+        this(runs, spans, events, snapshots, objectMapper, new RedactionService());
+    }
+
+    @Autowired
+    public TraceQueryService(TraceRunRepository runs, TraceSpanRepository spans, TraceEventRepository events,
+            TraceSnapshotRepository snapshots, ObjectMapper objectMapper, RedactionService redactionService) {
         this.runs=runs; this.spans=spans; this.events=events; this.snapshots=snapshots; this.objectMapper=objectMapper;
+        this.redactionService = redactionService == null ? new RedactionService() : redactionService;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public TraceDetail get(String traceId) {
         TraceRun run=require(traceId);
-        return new TraceDetail(run, spans.findByTraceId(traceId), events.findByTraceId(traceId), snapshots.findByTraceId(traceId));
+        return new TraceDetail(sanitize(run), spans.findByTraceId(traceId).stream().map(this::sanitize).toList(),
+                events.findByTraceId(traceId).stream().map(this::sanitize).toList(),
+                snapshots.findByTraceId(traceId).stream().map(this::sanitize).toList());
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
@@ -66,10 +77,88 @@ public class TraceQueryService {
     private AnswerabilityDiagnostic answerability(TraceSnapshot snapshot){if(snapshot==null||snapshot.getPayloadJson()==null)return null;try{JsonNode n=objectMapper.readTree(snapshot.getPayloadJson());return new AnswerabilityDiagnostic(text(n,"status"),text(n,"reasonCode"),text(n,"requiredAction"),ids(n.path("evidenceChunkIds")),n.path("businessDecisionLocked").asBoolean(false),n.path("ragMayExplainBusinessDecision").asBoolean(false),n.path("ragMayOverrideBusinessDecision").asBoolean(false));}catch(Exception e){return null;}}
     private List<CitationDiagnostic> citations(TraceSnapshot snapshot){return citationList(snapshot,"citations",false);}
     private List<CitationDiagnostic> rejectedCitationCandidates(TraceSnapshot snapshot){return citationList(snapshot,"rejectedCitationCandidates",true);}
-    private List<CitationDiagnostic> citationList(TraceSnapshot snapshot,String field,boolean rejected){if(snapshot==null||snapshot.getPayloadJson()==null)return List.of();try{JsonNode values=objectMapper.readTree(snapshot.getPayloadJson()).path(field);if(!values.isArray())return List.of();List<CitationDiagnostic> result=new ArrayList<>();for(JsonNode n:values){result.add(new CitationDiagnostic(text(n,"retrievalRunId"),longValue(n,"chunkId"),longValue(n,"documentId"),text(n,"title"),text(n,"sourceUri"),text(n,"effectiveFrom"),text(n,"effectiveTo"),rejected?text(n,"reasonCode"):null));}return result;}catch(Exception e){return List.of();}}
+    private List<CitationDiagnostic> citationList(TraceSnapshot snapshot,String field,boolean rejected){if(snapshot==null||snapshot.getPayloadJson()==null)return List.of();try{JsonNode values=objectMapper.readTree(snapshot.getPayloadJson()).path(field);if(!values.isArray())return List.of();List<CitationDiagnostic> result=new ArrayList<>();for(JsonNode n:values){result.add(new CitationDiagnostic(text(n,"retrievalRunId"),longValue(n,"chunkId"),longValue(n,"documentId"),text(n,"title"),redactionService.sanitizeSourceUri(text(n,"sourceUri")),text(n,"effectiveFrom"),text(n,"effectiveTo"),rejected?text(n,"reasonCode"):null));}return result;}catch(Exception e){return List.of();}}
     private static String text(JsonNode n,String field){JsonNode v=n.path(field);return v.isMissingNode()||v.isNull()?null:v.asText();}
     private static Long longValue(JsonNode n,String field){JsonNode v=n.path(field);return v.isMissingNode()||v.isNull()?null:v.asLong();}
     private static List<Long> ids(JsonNode n){if(!n.isArray())return List.of();List<Long> values=new ArrayList<>();for(JsonNode v:n)values.add(v.asLong());return values;}
+
+    private TraceRun sanitize(TraceRun source) {
+        TraceRun copy = new TraceRun();
+        copy.setId(source.getId());
+        copy.setTraceId(source.getTraceId());
+        copy.setSessionId(source.getSessionId());
+        copy.setWorkflowId(source.getWorkflowId());
+        copy.setUserId(source.getUserId());
+        copy.setRootInputEventId(source.getRootInputEventId());
+        copy.setRootOutputEventId(source.getRootOutputEventId());
+        copy.setStatus(source.getStatus());
+        copy.setProvider(source.getProvider());
+        copy.setModel(source.getModel());
+        copy.setPromptVersion(source.getPromptVersion());
+        copy.setDryRun(source.getDryRun());
+        copy.setStartedAt(source.getStartedAt());
+        copy.setFinishedAt(source.getFinishedAt());
+        copy.setDurationMs(source.getDurationMs());
+        copy.setErrorCode(safeText(source.getErrorCode()));
+        copy.setErrorMessage(safeText(source.getErrorMessage()));
+        copy.setMetadataJson(safeJson(source.getMetadataJson()));
+        return copy;
+    }
+
+    private TraceSpan sanitize(TraceSpan source) {
+        TraceSpan copy = new TraceSpan();
+        copy.setId(source.getId());
+        copy.setSpanId(source.getSpanId());
+        copy.setTraceId(source.getTraceId());
+        copy.setParentSpanId(source.getParentSpanId());
+        copy.setSpanType(source.getSpanType());
+        copy.setName(safeText(source.getName()));
+        copy.setStatus(source.getStatus());
+        copy.setStartedAt(source.getStartedAt());
+        copy.setFinishedAt(source.getFinishedAt());
+        copy.setDurationMs(source.getDurationMs());
+        copy.setInputRef(safeText(source.getInputRef()));
+        copy.setOutputRef(safeText(source.getOutputRef()));
+        copy.setErrorCode(safeText(source.getErrorCode()));
+        copy.setErrorMessage(safeText(source.getErrorMessage()));
+        copy.setMetadataJson(safeJson(source.getMetadataJson()));
+        return copy;
+    }
+
+    private TraceEvent sanitize(TraceEvent source) {
+        TraceEvent copy = new TraceEvent();
+        copy.setId(source.getId());
+        copy.setTraceId(source.getTraceId());
+        copy.setSpanId(source.getSpanId());
+        copy.setEventType(source.getEventType());
+        copy.setName(safeText(source.getName()));
+        copy.setMetadataJson(safeJson(source.getMetadataJson()));
+        copy.setOccurredAt(source.getOccurredAt());
+        return copy;
+    }
+
+    private TraceSnapshot sanitize(TraceSnapshot source) {
+        TraceSnapshot copy = new TraceSnapshot();
+        copy.setId(source.getId());
+        copy.setTraceId(source.getTraceId());
+        copy.setSpanId(source.getSpanId());
+        copy.setSnapshotType(source.getSnapshotType());
+        copy.setRefType(safeText(source.getRefType()));
+        copy.setRefId(safeText(source.getRefId()));
+        copy.setPayloadJson(safeJson(source.getPayloadJson()));
+        copy.setPayloadHash(source.getPayloadHash());
+        copy.setRedactionSummaryJson(source.getRedactionSummaryJson());
+        copy.setCreatedAt(source.getCreatedAt());
+        return copy;
+    }
+
+    private String safeText(String value) {
+        return value == null ? null : redactionService.redact(value).value();
+    }
+
+    private String safeJson(String value) {
+        return value == null ? null : redactionService.redact(value).value();
+    }
 
     public record TraceDetail(TraceRun run,List<TraceSpan> spans,List<TraceEvent> events,List<TraceSnapshot> snapshots){}
     public record TracePage(List<TraceRun> records,long total,long pageNo,long pageSize){}
