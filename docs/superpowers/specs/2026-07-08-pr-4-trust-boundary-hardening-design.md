@@ -7,38 +7,51 @@ This design document outlines the implementation plan for **PR-4: Trust Boundary
 ## 1. Unified DLP & Redaction Boundary (PR-4A)
 
 ### 1.1 Consolidation Strategy
-We will consolidate all regex patterns and detection logic into `RedactionService` as the single source of truth. `EvaluationLeakageSanitizer` will remain in the codebase to prevent import churn but will delegate all of its detection and replacement operations directly to `RedactionService`.
+We will consolidate all regex patterns and detection logic into `travelcare_agent.trace.RedactionService` as the single source of truth.
 
-#### Modified `RedactionService` Regex Matrix
-The patterns will cover:
-- Email addresses: `(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}`
-- Chinese mobile phone numbers: `(?<!\d)1[3-9]\d{9}(?!\d)`
-- ID Card numbers (18 digits): `(?<!\d)\d{17}[0-9Xx](?!\w)`
-- Bearer tokens: `(?i)Bearer\s+[A-Za-z0-9._~+/-]+=*`
-- JWT strings: `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`
-- Key-Value Secrets (e.g. `api-key`, `secret`, `token`): `(?i)(api[_-]?key|provider[_-]?secret|secret|token|credential|password|signature)\s*[:=]\s*[^\s,;\"}]+`
-- Query/Fragment Secrets in URL (e.g. `?token=xxx`): `(?i)([?&])(api[_-]?key|token|secret|credential|authorization|signature)=[^\s&#`]+`
-- Raw prompt and provider output metadata: `(?i)raw[_ -]?(prompt|provider[_ -]?output|model[_ -]?output|tool[_ -]?output)\s*[:=][^\n`]*`
-- Bank card numbers: `(?i)(bank|card|银行卡|卡号)[^\n]{0,32}\b\d{16,19}\b`
+- **`EvaluationLeakageSanitizer` Facade**:
+  - We will modify `EvaluationLeakageSanitizer` to act as a compatible facade that internally delegates all of its detection and replacement operations directly to `RedactionService`.
+  - Future code will directly inject and use `RedactionService`.
 
-#### Added Public Helper Methods in `RedactionService`
-- `public boolean containsSensitiveLeakage(Object value)`: delegated by `EvaluationLeakageSanitizer` to check for safety leakage.
-- `public String sanitizeSourceUri(String value)`: removes sensitive query parameters and fragments, keeping non-sensitive query.
-- `public String sanitizeLogField(String value, int limit)`: redacts logs and limits size.
-- `public String safeMetricTagValue(String value)`: checks if value is sensitive (keys/patterns/UUID/phone/email/etc.) and returns `"REDACTED"` or standard value.
+#### Modified `RedactionService` Configuration & API
+`RedactionService` will support:
+- **Sensitive field names (Keys)**:
+  `phone`, `email`, `idCard`/`id_card`/`idcard`, `authorization`, `token`, `apiKey`/`api_key`, `secret`, `password`, `cookie`, `rawPrompt`/`raw_prompt`, `rawProviderOutput`/`raw_provider_output`, `rawModelOutput`, `rawToolOutput`.
+- **Sensitive text patterns (Regex)**:
+  - Email addresses: `(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}`
+  - Chinese mobile phone numbers: `(?<!\d)1[3-9]\d{9}(?!\d)`
+  - ID Card numbers (18 digits): `(?<!\d)\d{17}[0-9Xx](?!\w)`
+  - Bearer tokens: `(?i)Bearer\s+[A-Za-z0-9._~+/-]+=*`
+  - JWT strings: `eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`
+  - Key-Value Secrets (e.g. `api-key`, `secret`, `token`): `(?i)(api[_-]?key|provider[_-]?secret|secret|token|credential|password|signature)\s*[:=]\s*[^\s,;\"}]+`
+  - Query/Fragment Secrets in URL (e.g. `?token=xxx`): `(?i)([?&])(api[_-]?key|token|secret|credential|authorization|signature)=[^\s&#`]+`
+  - Raw prompt and provider output metadata: `(?i)raw[_ -]?(prompt|provider[_ -]?output|model[_ -]?output|tool[_ -]?output)\s*[:=][^\n`]*`
+  - Bank card numbers: `(?i)(bank|card|银行卡|卡号)[^\n]{0,32}\b\d{16,19}\b`
 
-### 1.2 Output Surface Protection & Interception
-- **Handoff Context Packet**: We will pass transcript logs, customer goals, and RAG details through `redactionService.redact()`. Query parameters such as `?token=xxx` in RAG source URIs will be stripped out via `redactionService.sanitizeSourceUri()`.
+- **Public Methods**:
+  - `public RedactionResult redact(String value)`: Redacts sensitive fields in JSON or matches regex patterns in raw text.
+  - `public RedactionResult redactObject(Object value)`: Stringifies the object and redacts.
+  - `public boolean containsSensitiveLeakage(Object value)`: Checks if any sensitive pattern is matched.
+  - `public String sanitizeSourceUri(String value)`: Removes sensitive query parameters (e.g., `token`, `secret`, `key`, `signature`, `authorization`) and URL fragments, while retaining safe query parameters.
+  - `public String sanitizeLogField(String value, int limit)`: Redacts the string and truncates it if it exceeds `limit` characters.
+  - `public String safeMetricTagValue(String value)`: Redacts the tag value to `"REDACTED"` if it contains forbidden keys or matches sensitive regexes.
+
+### 1.2 Output Surface Protection
+- **Handoff Context Packet**: All transcripts, goals, and RAG details will be sanitized. Source URIs in citations will have secret query parameters and fragments stripped out via `sanitizeSourceUri`.
 - **AgentOps Debug API**: Both inputs (questions) and outputs will be automatically sanitized. No API keys or raw prompts will be exposed.
-- **Trace Reading Boundary (TraceQueryService)**:
-  - We will perform in-place mutation of the queried entity fields (such as `TraceRun.metadataJson`, `TraceSpan.inputRef`, `TraceSpan.outputRef`, `TraceSpan.metadataJson`, `TraceEvent.metadataJson`, `TraceSnapshot.payloadJson`) inside `TraceQueryService.get()` and `TraceQueryService.diagnostics()` using `RedactionService` before returning them.
-  - This guarantees that even historical or manually constructed trace data is sanitized at the API boundary, with zero DB persistence side effects (since the transaction is read-only).
-- **Evaluation Report**: `EvaluationRunReportWriter` will utilize the unified `EvaluationLeakageSanitizer.redact(reportText)` (which delegates to `RedactionService`) to clean reports.
-- **GlobalExceptionHandler**: Both `BusinessException` message and validation error messages in the HTTP response will be redacted via `RedactionService`. Unhandled internal exception logging will continue to be redacted and capped in size.
+- **Trace Snapshot / Diagnostics**:
+  - `TraceService` will continue to redact snapshots on write.
+  - `TraceQueryService.get()` and `diagnostics()` will perform a runtime in-place sanitization step on all returned `TraceRun`, `TraceSpan`, `TraceEvent`, and `TraceSnapshot` entity properties (messages, metadata, payload, citation sourceUri) before returning, covering historical or manually mocked data.
+- **Evaluation Report**: `EvaluationRunReportWriter` will utilize the unified `EvaluationLeakageSanitizer.redact(reportText)` to clean reports.
+- **GlobalExceptionHandler**:
+  - `BusinessException` and validation error responses will be redacted using `RedactionService`.
+  - Unhandled exception logs will continue to be redacted and truncated.
 - **Log MDC / Structured Logs**:
-  - We will implement a custom Logback MessageConverter (`RedactingMessageConverter`) that registers in `logback-spring.xml` to intercept and redact console logs. The converter instantiates `new RedactionService()` directly to avoid Spring context initialization lifecycle issues.
+  - We will implement a custom Logback MessageConverter (e.g. `RedactingMessageConverter`) registered in `logback-spring.xml` (or dynamically via Spring) to intercept and redact console logs.
   - In `TraceIdFilter` and `TraceContextHolder`, any value set into SLF4J MDC will be pre-sanitized.
-- **Metrics Tag Safety**: `TravelCareMetrics` safe tag checking will delegate to `RedactionService.safeMetricTagValue(value)` to clean tags before publishing.
+- **Reusability**:
+  - `WorkflowTaskWorker.safeLogMessage` will be refactored to call `redactionService.sanitizeLogField(value, 160)`.
+  - `TravelCareMetrics` will call `redactionService.safeMetricTagValue(value)` to clean tags, while keeping high-cardinality removal policies intact.
 
 ---
 
