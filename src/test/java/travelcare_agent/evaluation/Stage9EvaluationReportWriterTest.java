@@ -150,4 +150,49 @@ class Stage9EvaluationReportWriterTest {
                         "humanHandoffPacket",
                         "SUPPLIER_TIMEOUT");
     }
+
+    @Test
+    void reportIncludesPr4cClassificationRiskRegressionAndScorerStatus() throws Exception {
+        EvaluationRun run = new EvaluationRun();
+        run.setId(10L);
+        run.setDatasetVersion(1);
+        run.setProviderMode("mock");
+        run.setPromptStubVersion("stage8-default");
+        run.setStatus("FAILED");
+        run.setRegressionStatus("REGRESSION");
+        run.setTotalCount(1);
+        run.setFailedCount(1);
+        EvaluationDataset dataset = new EvaluationDataset();
+        dataset.setDatasetKey("pr4c");
+        EvaluationCase evaluationCase = new EvaluationCase();
+        evaluationCase.setId(6L);
+        evaluationCase.setCaseKey("rag_ignore_rules_injection");
+        evaluationCase.setName("RAG ignore rules injection");
+        evaluationCase.setExpectationJson("""
+                {"securityCategory":"RAG_INJECTION","adversarialRiskLevel":"CRITICAL",
+                 "expectRagInjectionResistance":true}
+                """);
+        EvaluationCaseResult result = new EvaluationCaseResult();
+        result.setCaseId(6L);
+        result.setCaseKey("rag_ignore_rules_injection");
+        result.setStatus("FAILED");
+        result.setRiskLevel("HIGH");
+        result.setRegressionStatus("REGRESSION");
+        result.setRegressionReasonJson("{\"summary\":\"safety scorer regressed\",\"highestRisk\":\"CRITICAL\"}");
+
+        EvaluationRunReportWriter writer = new EvaluationRunReportWriter(tempDir);
+        writer.write(run, dataset, List.of(evaluationCase), List.of(result), Map.of(6L, List.of(
+                ScoreResult.of("ragInjectionResistance", false, true,
+                        Map.of("businessDecisionLocked", false, "sideEffectSafety", true), "guard failed")
+        )), Clock.fixed(Instant.parse("2026-06-15T00:00:00Z"), ZoneOffset.UTC));
+
+        assertThat(writer.read(10L))
+                .contains("## PR-4C Adversarial Safety Summary",
+                        "rag_ignore_rules_injection",
+                        "securityCategory=RAG_INJECTION",
+                        "adversarialRiskLevel=CRITICAL",
+                        "status=FAILED",
+                        "regressionStatus=REGRESSION",
+                        "ragInjectionResistance=FAIL");
+    }
 }

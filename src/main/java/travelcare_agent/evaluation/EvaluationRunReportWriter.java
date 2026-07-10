@@ -66,6 +66,7 @@ public class EvaluationRunReportWriter {
                 b.append("- ").append(r.getCaseKey()).append(": ").append(summary(r)).append("\n");
         }
         appendPr3cSafetySummary(b, results, scores);
+        appendPr4cAdversarialSummary(b, cases, results, scores);
         for (EvaluationCaseResult r : results) {
             EvaluationCase c = byId.get(r.getCaseId());
             b.append("\n## Case ").append(r.getCaseKey()).append("\n\n");
@@ -85,6 +86,54 @@ public class EvaluationRunReportWriter {
         }
         Files.writeString(path(run.getId()), EvaluationLeakageSanitizer.redact(b.toString()));
         return path(run.getId());
+    }
+
+    private void appendPr4cAdversarialSummary(StringBuilder b, List<EvaluationCase> cases,
+            List<EvaluationCaseResult> results, Map<Long, List<ScoreResult>> scores) {
+        Map<Long, EvaluationCaseResult> resultsByCase = new HashMap<>();
+        results.forEach(result -> resultsByCase.put(result.getCaseId(), result));
+        List<String> scorerNames = List.of("injectionResistance", "ragInjectionResistance",
+                "toolResultInstructionIgnored", "unsafeBusinessCommitmentBlocked");
+        List<String> lines = new ArrayList<>();
+        for (EvaluationCase evaluationCase : cases) {
+            JsonNode expectation = expectation(evaluationCase);
+            String category = text(expectation, "securityCategory");
+            String risk = text(expectation, "adversarialRiskLevel");
+            if (category == null && risk == null) continue;
+            EvaluationCaseResult result = resultsByCase.get(evaluationCase.getId());
+            String scorerStatus = scores.getOrDefault(evaluationCase.getId(), List.of()).stream()
+                    .filter(score -> score.applied() && scorerNames.contains(score.scorer()))
+                    .map(score -> score.scorer() + "=" + (score.passed() ? "PASS" : "FAIL"))
+                    .reduce((left, right) -> left + ", " + right)
+                    .orElse("none");
+            lines.add("- " + evaluationCase.getCaseKey()
+                    + ": securityCategory=" + value(category)
+                    + ", adversarialRiskLevel=" + value(risk)
+                    + ", status=" + value(result == null ? null : result.getStatus())
+                    + ", regressionStatus=" + value(result == null ? null : result.getRegressionStatus())
+                    + ", " + scorerStatus);
+        }
+        if (lines.isEmpty()) return;
+        b.append("\n## PR-4C Adversarial Safety Summary\n\n");
+        lines.forEach(line -> b.append(line).append("\n"));
+    }
+
+    private JsonNode expectation(EvaluationCase evaluationCase) {
+        if (evaluationCase == null || evaluationCase.getExpectationJson() == null) return null;
+        try {
+            return json.readTree(evaluationCase.getExpectationJson());
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String text(JsonNode root, String field) {
+        JsonNode value = root == null ? null : root.get(field);
+        return value == null || value.isNull() ? null : value.asText();
+    }
+
+    private String value(String value) {
+        return value == null || value.isBlank() ? "UNKNOWN" : value;
     }
 
     private void appendPr3cSafetySummary(StringBuilder b, List<EvaluationCaseResult> results,
