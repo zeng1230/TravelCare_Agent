@@ -1,6 +1,12 @@
 package travelcare_agent.adapter.order;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.retry.Retry;
+import io.github.resilience4j.retry.RetryConfig;
+import io.github.resilience4j.timelimiter.TimeLimiter;
+import io.github.resilience4j.timelimiter.TimeLimiterConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -14,6 +20,8 @@ import travelcare_agent.observability.TravelCareMetrics;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -43,6 +51,25 @@ class HttpSupplierOrderAdapterTest {
         assertThat(order.get().refundable()).isTrue();
         assertCounter(fixture.registry, "travelcare.supplier.requests.total", "success", 1.0);
         assertThat(fixture.registry.find("travelcare.supplier.failures.total").counters()).isEmpty();
+        fixture.server.verify();
+    }
+
+    @Test
+    void retriesUnavailableResponseThenRecordsOneBusinessRequest() {
+        Fixture fixture = mockServerFixture(2);
+        fixture.server.expect(requestTo("http://supplier.test/supplier/orders/ORD-1001?userId=1001"))
+                .andRespond(withServerError().contentType(MediaType.APPLICATION_JSON).body(error("TEMPORARY")));
+        fixture.server.expect(requestTo("http://supplier.test/supplier/orders/ORD-1001?userId=1001"))
+                .andRespond(withSuccess(orderJson(), MediaType.APPLICATION_JSON));
+
+        Optional<OrderSnapshot> result = fixture.adapter.getOrder(null, "ORD-1001", 1001L);
+
+        assertThat(result).isPresent();
+        assertCounter(fixture.registry, "travelcare.supplier.requests.total", "success", 1.0);
+        assertThat(fixture.registry.get("travelcare.supplier.retry.total")
+                .tag("adapter", "http").tag("supplier", "gateway")
+                .tag("outcome", "retry").tag("failureCode", "SUPPLIER_UNAVAILABLE")
+                .counter().count()).isEqualTo(1.0);
         fixture.server.verify();
     }
 
@@ -188,10 +215,14 @@ class HttpSupplierOrderAdapterTest {
     }
 
     private static Fixture mockServerFixture() {
+        return mockServerFixture(1);
+    }
+
+    private static Fixture mockServerFixture(int maxAttempts) {
         RestClient.Builder builder = RestClient.builder();
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        HttpSupplierOrderAdapter adapter = adapter(builder.build(), registry);
+        HttpSupplierOrderAdapter adapter = adapter(builder.build(), registry, maxAttempts);
         return new Fixture(adapter, server, registry);
     }
 
@@ -202,15 +233,37 @@ class HttpSupplierOrderAdapterTest {
                 })
                 .build();
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
-        return new Fixture(adapter(restClient, registry), null, registry);
+        return new Fixture(adapter(restClient, registry, 1), null, registry);
     }
 
     private static HttpSupplierOrderAdapter adapter(RestClient restClient, SimpleMeterRegistry registry) {
+        return adapter(restClient, registry, 1);
+    }
+
+    private static HttpSupplierOrderAdapter adapter(RestClient restClient, SimpleMeterRegistry registry, int maxAttempts) {
         SupplierGatewayProperties properties = new SupplierGatewayProperties();
         properties.setBaseUrl("http://supplier.test");
         properties.setConnectTimeout(Duration.ofMillis(100));
         properties.setReadTimeout(Duration.ofMillis(100));
-        return new HttpSupplierOrderAdapter(restClient, properties, new TravelCareMetrics(registry));
+        return new HttpSupplierOrderAdapter(restClient, properties, callExecutor(registry, maxAttempts), new TravelCareMetrics(registry));
+    }
+
+    private static SupplierCallExecutor callExecutor(SimpleMeterRegistry registry, int maxAttempts) {
+        CircuitBreaker circuitBreaker = CircuitBreaker.of("supplier-test", CircuitBreakerConfig.custom()
+                .slidingWindowSize(10).minimumNumberOfCalls(10).build());
+        Retry retry = Retry.of("supplier-test", RetryConfig.custom()
+                .maxAttempts(maxAttempts).waitDuration(Duration.ZERO)
+                .retryOnException(exception -> exception instanceof SupplierGatewayClientException supplier
+                        && supplier.failureCode().retryable())
+                .build());
+        TimeLimiter timeLimiter = TimeLimiter.of(TimeLimiterConfig.custom()
+                .timeoutDuration(Duration.ofSeconds(1)).cancelRunningFuture(true).build());
+        ExecutorService executorService = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "supplier-adapter-test");
+            thread.setDaemon(true);
+            return thread;
+        });
+        return new SupplierCallExecutor(circuitBreaker, retry, timeLimiter, executorService, new TravelCareMetrics(registry));
     }
 
     private static void assertCounter(SimpleMeterRegistry registry, String name, String outcome, double count) {

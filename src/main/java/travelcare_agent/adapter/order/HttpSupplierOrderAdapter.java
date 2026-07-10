@@ -37,22 +37,22 @@ public class HttpSupplierOrderAdapter implements OrderAdapter {
 
     private final RestClient restClient;
     private final SupplierGatewayProperties properties;
+    private final SupplierCallExecutor supplierCallExecutor;
     private final ObjectMapper objectMapper;
     private final TravelCareMetrics metrics;
 
     @Autowired
     public HttpSupplierOrderAdapter(RestClient.Builder builder, SupplierGatewayProperties properties,
+                                    SupplierCallExecutor supplierCallExecutor,
                                     @Autowired(required = false) TravelCareMetrics metrics) {
-        this(builder.requestFactory(requestFactory(properties)).build(), properties, metrics);
+        this(builder.requestFactory(requestFactory(properties)).build(), properties, supplierCallExecutor, metrics);
     }
 
-    HttpSupplierOrderAdapter(RestClient restClient, SupplierGatewayProperties properties) {
-        this(restClient, properties, null);
-    }
-
-    HttpSupplierOrderAdapter(RestClient restClient, SupplierGatewayProperties properties, TravelCareMetrics metrics) {
+    HttpSupplierOrderAdapter(RestClient restClient, SupplierGatewayProperties properties,
+                             SupplierCallExecutor supplierCallExecutor, TravelCareMetrics metrics) {
         this.properties = properties;
         this.restClient = restClient;
+        this.supplierCallExecutor = supplierCallExecutor;
         this.objectMapper = new ObjectMapper().findAndRegisterModules();
         this.metrics = metrics;
     }
@@ -78,54 +78,53 @@ public class HttpSupplierOrderAdapter implements OrderAdapter {
         SupplierFailureCode outcome = null;
         String host = host(properties.getBaseUrl());
         String orderHash = orderHash(effectiveOrderNo);
+        String traceId = currentTraceId();
         try {
             log.info("supplier order request traceId={} adapterName={} supplier={} host={} orderHash={}",
-                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash);
-            String body = restClient.get()
-                    .uri(url)
-                    .header(TRACE_ID_HEADER, currentTraceId())
-                    .retrieve()
-                    .body(String.class);
-            OrderSnapshot snapshot = parseAndValidate(body);
-            log.info("supplier order response traceId={} adapterName={} supplier={} host={} orderHash={} outcome={}",
-                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, "success");
-            return Optional.of(snapshot);
-        } catch (RestClientResponseException ex) {
-            if (ex.getStatusCode() == HttpStatus.NOT_FOUND) {
+                    traceId, getClass().getSimpleName(), SUPPLIER, host, orderHash);
+            Optional<OrderSnapshot> result = supplierCallExecutor.execute(ADAPTER, SUPPLIER,
+                    () -> executeRemoteLookup(url, traceId, host, orderHash));
+            if (result.isEmpty()) {
                 outcome = SupplierFailureCode.SUPPLIER_ORDER_NOT_FOUND;
-                log.info("supplier order response traceId={} adapterName={} supplier={} host={} orderHash={} outcome=not_found status={}",
-                        currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, ex.getStatusCode().value());
-                return Optional.empty();
             }
-            SupplierFailureCode code = httpFailureCode(ex);
-            outcome = code;
-            log.warn("supplier order failure traceId={} adapterName={} supplier={} host={} orderHash={} failureCode={} status={}",
-                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, code.name(), ex.getStatusCode().value());
-            throw new SupplierGatewayClientException(code, "supplier gateway returned status=" + ex.getStatusCode().value()
-                    + " supplier=" + SUPPLIER + " host=" + host + " orderHash=" + orderHash, ex);
-        } catch (RestClientException ex) {
-            if (isTimeout(ex)) {
-                outcome = SupplierFailureCode.SUPPLIER_TIMEOUT;
-                log.warn("supplier order failure traceId={} adapterName={} supplier={} host={} orderHash={} failureCode={} errorType={}",
-                        currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, outcome.name(), ex.getClass().getSimpleName());
-                throw new SupplierGatewayClientException(outcome, "supplier gateway timeout supplier=" + SUPPLIER
-                        + " host=" + host + " orderHash=" + orderHash, ex);
-            }
-            outcome = SupplierFailureCode.SUPPLIER_CONNECTION_FAILED;
-            log.warn("supplier order failure traceId={} adapterName={} supplier={} host={} orderHash={} failureCode={} errorType={}",
-                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, outcome.name(), ex.getClass().getSimpleName());
-            throw new SupplierGatewayClientException(outcome, "supplier gateway connection failed supplier=" + SUPPLIER
-                    + " host=" + host + " orderHash=" + orderHash, ex);
+            log.info("supplier order response traceId={} adapterName={} supplier={} host={} orderHash={} outcome={}",
+                    traceId, getClass().getSimpleName(), SUPPLIER, host, orderHash,
+                    result.isEmpty() ? "not_found" : "success");
+            return result;
         } catch (SupplierGatewayClientException ex) {
             outcome = ex.failureCode();
             log.warn("supplier order failure traceId={} adapterName={} supplier={} host={} orderHash={} failureCode={}",
-                    currentTraceId(), getClass().getSimpleName(), SUPPLIER, host, orderHash, outcome.name());
+                    traceId, getClass().getSimpleName(), SUPPLIER, host, orderHash, outcome.name());
             throw ex;
         } finally {
             if (metrics != null) {
                 String metricOutcome = outcome == null ? "success" : outcome.outcome();
-                metrics.recordSupplierCall(ADAPTER, SUPPLIER, metricOutcome, Duration.between(startedAt, Instant.now()));
+                metrics.recordSupplierCall(ADAPTER, SUPPLIER, metricOutcome, Duration.between(startedAt, Instant.now()), outcome);
             }
+        }
+    }
+
+    private Optional<OrderSnapshot> executeRemoteLookup(String url, String traceId, String host, String orderHash) {
+        try {
+            String body = restClient.get()
+                    .uri(url)
+                    .header(TRACE_ID_HEADER, traceId)
+                    .retrieve()
+                    .body(String.class);
+            return Optional.of(parseAndValidate(body));
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode() == HttpStatus.NOT_FOUND) {
+                return Optional.empty();
+            }
+            SupplierFailureCode code = httpFailureCode(ex);
+            throw new SupplierGatewayClientException(code, "supplier gateway returned status=" + ex.getStatusCode().value()
+                    + " supplier=" + SUPPLIER + " host=" + host + " orderHash=" + orderHash, ex);
+        } catch (RestClientException ex) {
+            SupplierFailureCode code = isTimeout(ex)
+                    ? SupplierFailureCode.SUPPLIER_TIMEOUT
+                    : SupplierFailureCode.SUPPLIER_CONNECTION_FAILED;
+            throw new SupplierGatewayClientException(code, "supplier gateway call failed supplier=" + SUPPLIER
+                    + " host=" + host + " orderHash=" + orderHash, ex);
         }
     }
 

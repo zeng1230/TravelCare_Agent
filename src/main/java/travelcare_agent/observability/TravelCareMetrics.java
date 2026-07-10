@@ -9,6 +9,7 @@ import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import travelcare_agent.adapter.order.SupplierFailureCode;
 import travelcare_agent.trace.RedactionService;
 
 import java.time.Duration;
@@ -256,16 +257,32 @@ public class TravelCareMetrics {
     }
 
     public void recordSupplierCall(String adapter, String supplier, String outcome, Duration duration) {
-        Map<String, String> tags = Map.of(
-                "adapter", adapter,
-                "supplier", supplier,
-                "outcome", outcome
-        );
+        recordSupplierCall(adapter, supplier, outcome, duration, null);
+    }
+
+    public void recordSupplierCall(String adapter, String supplier, String outcome, Duration duration,
+                                   SupplierFailureCode failureCode) {
+        Map<String, String> tags = new java.util.LinkedHashMap<>();
+        tags.put("adapter", adapter);
+        tags.put("supplier", supplier);
+        tags.put("outcome", outcome);
+        if (failureCode != null) {
+            tags.put("failureCode", failureCode.name());
+        }
         counter("travelcare.supplier.requests.total", tags);
         timer("travelcare.supplier.latency", duration, tags);
-        if (isSupplierFailureOutcome(outcome)) {
+        if (failureCode == null ? isSupplierFailureOutcome(outcome) : failureCode.technicalFailure()) {
             counter("travelcare.supplier.failures.total", tags);
         }
+    }
+
+    public void recordSupplierRetry(String adapter, String supplier, String failureCode) {
+        counter("travelcare.supplier.retry.total", Map.of(
+                "adapter", adapter,
+                "supplier", supplier,
+                "outcome", "retry",
+                "failureCode", failureCode
+        ));
     }
 
     public void gauge(String name, Supplier<Number> supplier) {

@@ -11,7 +11,7 @@ public class SupplierGatewayProperties {
 
     private String baseUrl = "http://localhost:8081";
     private long connectTimeoutMs = 1000;
-    private long readTimeoutMs = 2000;
+    private long readTimeoutMs = 1500;
 
     public String getBaseUrl() {
         return baseUrl;

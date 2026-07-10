@@ -42,7 +42,24 @@ travelcare:
     gateway:
       base-url: ${TRAVELCARE_SUPPLIER_GATEWAY_BASE_URL:http://localhost:8081}
       connect-timeout-ms: ${TRAVELCARE_SUPPLIER_CONNECT_TIMEOUT_MS:1000}
-      read-timeout-ms: ${TRAVELCARE_SUPPLIER_READ_TIMEOUT_MS:2000}
+      read-timeout-ms: ${TRAVELCARE_SUPPLIER_READ_TIMEOUT_MS:1500}
+    resilience:
+      circuit-breaker:
+        sliding-window-size: ${TRAVELCARE_SUPPLIER_CB_SLIDING_WINDOW_SIZE:10}
+        minimum-number-of-calls: ${TRAVELCARE_SUPPLIER_CB_MINIMUM_CALLS:5}
+        failure-rate-threshold: ${TRAVELCARE_SUPPLIER_CB_FAILURE_RATE_THRESHOLD:50}
+        slow-call-duration-threshold: ${TRAVELCARE_SUPPLIER_CB_SLOW_CALL_DURATION_THRESHOLD:3500ms}
+        slow-call-rate-threshold: ${TRAVELCARE_SUPPLIER_CB_SLOW_CALL_RATE_THRESHOLD:75}
+        wait-duration-in-open-state: ${TRAVELCARE_SUPPLIER_CB_OPEN_DURATION:10s}
+        permitted-number-of-calls-in-half-open-state: ${TRAVELCARE_SUPPLIER_CB_HALF_OPEN_CALLS:2}
+      retry:
+        max-attempts: ${TRAVELCARE_SUPPLIER_RETRY_MAX_ATTEMPTS:2}
+        wait-duration: ${TRAVELCARE_SUPPLIER_RETRY_WAIT_DURATION:100ms}
+      time-limiter:
+        timeout: ${TRAVELCARE_SUPPLIER_TIME_LIMITER_TIMEOUT:1500ms}
+      executor:
+        pool-size: ${TRAVELCARE_SUPPLIER_EXECUTOR_POOL_SIZE:4}
+        queue-capacity: ${TRAVELCARE_SUPPLIER_EXECUTOR_QUEUE_CAPACITY:32}
 
 mybatis-plus:
   configuration:
