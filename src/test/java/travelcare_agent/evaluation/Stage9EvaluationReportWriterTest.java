@@ -195,4 +195,44 @@ class Stage9EvaluationReportWriterTest {
                         "regressionStatus=REGRESSION",
                         "ragInjectionResistance=FAIL");
     }
+
+    @Test
+    void reportIncludesPr4dPartialBuildSummaryWithStableFields() throws Exception {
+        EvaluationRun run = new EvaluationRun();
+        run.setId(11L);
+        run.setDatasetVersion(1);
+        run.setProviderMode("mock");
+        run.setPromptStubVersion("stage8-default");
+        run.setStatus("PASSED");
+        run.setRegressionStatus("NOT_COMPARED");
+        run.setTotalCount(1);
+        run.setPassedCount(1);
+        EvaluationDataset dataset = new EvaluationDataset();
+        dataset.setDatasetKey("pr4d");
+        EvaluationCase evaluationCase = new EvaluationCase();
+        evaluationCase.setId(7L);
+        evaluationCase.setCaseKey("missing_refund_case");
+        evaluationCase.setName("missing refund case");
+        EvaluationCaseResult result = new EvaluationCaseResult();
+        result.setCaseId(7L);
+        result.setCaseKey("missing_refund_case");
+        result.setStatus("PASSED");
+        result.setRegressionStatus("NOT_COMPARED");
+        Map<String, Object> actual = new LinkedHashMap<>();
+        actual.put("completenessStatus", "INSUFFICIENT");
+        actual.put("missingSections", List.of("REFUND_CASE"));
+        actual.put("riskWarnings", List.of("REFUND_DECISION_UNVERIFIED"));
+        actual.put("evidenceSufficientForManualDecision", false);
+        actual.put("approvalAllowed", false);
+
+        EvaluationRunReportWriter writer = new EvaluationRunReportWriter(tempDir);
+        writer.write(run, dataset, List.of(evaluationCase), List.of(result), Map.of(7L, List.of(
+                ScoreResult.of("partialBuild", true, true, actual, "PARTIAL_BUILD_MATCHED")
+        )), Clock.fixed(Instant.parse("2026-06-15T00:00:00Z"), ZoneOffset.UTC));
+
+        assertThat(writer.read(11L)).contains("## PR-4D Partial Build Summary",
+                "missing_refund_case", "partialBuild=PASS", "INSUFFICIENT", "REFUND_CASE",
+                "REFUND_DECISION_UNVERIFIED", "evidenceSufficientForManualDecision=false",
+                "approvalAllowed=false");
+    }
 }

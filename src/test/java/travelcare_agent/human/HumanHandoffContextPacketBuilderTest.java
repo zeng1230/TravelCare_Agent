@@ -2,7 +2,9 @@ package travelcare_agent.human;
 
 import org.junit.jupiter.api.Test;
 import travelcare_agent.conversation.entity.SessionEvent;
+import travelcare_agent.conversation.entity.Session;
 import travelcare_agent.conversation.repository.InMemorySessionEventRepository;
+import travelcare_agent.conversation.repository.InMemorySessionRepository;
 import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.enums.SessionEventRole;
 import travelcare_agent.enums.SessionEventType;
@@ -36,6 +38,7 @@ class HumanHandoffContextPacketBuilderTest {
 
     @Test
     void buildsPacketFromPersistedWorkflowRefundTraceAndConversationFacts() {
+        InMemorySessionRepository sessions = sessions();
         InMemorySessionEventRepository events = new InMemorySessionEventRepository();
         events.save(event(10L, 1, SessionEventRole.USER, "Can I refund order ORD-1001? phone=13812345678"));
         events.save(event(10L, 2, SessionEventRole.ASSISTANT, "manual support will verify this refund inquiry."));
@@ -75,6 +78,9 @@ class HumanHandoffContextPacketBuilderTest {
                                 "rejectedCitationCandidates":[{"retrievalRunId":"ret-1","documentId":9,"chunkId":10,
                                 "title":"Old SOP","sourceUri":"https://example.com/old","reasonCode":"EXPIRED_SOURCE"}]}
                                 """),
+                        snapshot(TraceSnapshotType.ANSWERABILITY_DECISION.name(), """
+                                {"status":"ANSWERABLE","reasonCode":"SUFFICIENT_CONTEXT"}
+                                """),
                         snapshot(TraceSnapshotType.MODEL_SAFETY_DECISION.name(), """
                                 {"safetyDecision":"HANDOFF","reasonCode":"AUTHORITATIVE_DECISION_CONFLICT",
                                 "riskFlags":["REFUND_CONFLICT"]}
@@ -86,20 +92,29 @@ class HumanHandoffContextPacketBuilderTest {
                 new TraceQueryService.RedactionSummary(0), List.of(), false, null, List.of(), List.of()));
 
         HumanHandoffContextPacketBuilder builder = new HumanHandoffContextPacketBuilder(
-                events, workflows, steps, refunds, traceRuns, traceQueryService, new RedactionService());
+                sessions, events, workflows, steps, refunds, traceRuns, traceQueryService, new RedactionService());
 
         HumanHandoffContextPacket packet = builder.build(new HumanHandoffContextPacketBuilder.Request(
                 10L, 20L, 30L, "REFUND_REVIEW", "HIGH",
                 "order ownership could not be verified", "{\"reasonCode\":\"order ownership could not be verified\"}"));
 
-        assertThat(packet.packetVersion()).isEqualTo("PR-3A-v1");
+        assertThat(packet.packetVersion()).isEqualTo("PR-4D-v1");
         assertThat(packet.packetMode()).isEqualTo("MATERIALIZED");
+        assertThat(packet.completenessStatus()).isEqualTo("COMPLETE");
+        assertThat(packet.missingSections()).isEmpty();
+        assertThat(packet.riskWarnings()).isEmpty();
+        assertThat(packet.customerGoal().contextType()).isEqualTo("UNVERIFIED_CONVERSATION_CONTEXT");
         assertThat(packet.customerGoal().summary())
                 .isEqualTo("Customer wants to check whether order ORD-1001 can be refunded.");
         assertThat(packet.customerGoal().latestUserMessage()).contains("[REDACTED]");
         assertThat(packet.refundRuleDecision().policyResultJson()).doesNotContain("sk-private");
         assertThat(packet.verifiedOrderFacts().orderNo()).isEqualTo("ORD-1001");
+        assertThat(packet.verifiedOrderFacts().verified()).isTrue();
+        assertThat(packet.verifiedOrderFacts().evidenceSource()).isEqualTo("WORKFLOW_STEP_OUTPUT");
         assertThat(packet.refundRuleDecision().status()).isEqualTo("NEED_HUMAN");
+        assertThat(packet.refundRuleDecision().verified()).isTrue();
+        assertThat(packet.refundRuleDecision().evidenceSufficientForManualDecision()).isTrue();
+        assertThat(packet.answerability().status()).isEqualTo("ANSWERABLE");
         assertThat(packet.ragEvidence().acceptedCitations()).singleElement()
                 .satisfies(citation -> assertThat(citation.sourceUri()).isEqualTo("https://example.com/sop?ok=1"));
         assertThat(packet.ragEvidence().rejectedCitations()).singleElement()
@@ -115,6 +130,7 @@ class HumanHandoffContextPacketBuilderTest {
 
     @Test
     void legacyFallbackPacketKeepsIdsReasonAndDurableContextWithoutLiveReconstruction() {
+        InMemorySessionRepository sessions = sessions();
         InMemorySessionEventRepository events = new InMemorySessionEventRepository();
         events.save(event(10L, 1, SessionEventRole.USER, "I need refund help"));
 
@@ -131,25 +147,116 @@ class HumanHandoffContextPacketBuilderTest {
         refunds.save(refund);
 
         HumanHandoffContextPacketBuilder builder = new HumanHandoffContextPacketBuilder(
-                events, workflows, new InMemoryWorkflowStepRepository(), refunds,
+                sessions, events, workflows, new InMemoryWorkflowStepRepository(), refunds,
                 emptyTraceRuns(), mock(TraceQueryService.class), new RedactionService());
 
         HumanHandoffContextPacket packet = builder.fromStoredEvidence(caseWithEvidence(
                 99L, 10L, 20L, 30L, "ORDER_LOOKUP_FAILED", "{\"reasonCode\":\"ORDER_LOOKUP_FAILED\"}"));
 
-        assertThat(packet.packetMode()).isEqualTo("LEGACY_FALLBACK");
+        assertThat(packet.packetMode()).isEqualTo("REBUILT_FROM_DURABLE_FACTS");
         assertThat(packet.caseId()).isEqualTo(99L);
         assertThat(packet.customerGoal().latestUserMessage()).isEqualTo("I need refund help");
         assertThat(packet.refundRuleDecision().status()).isEqualTo("NEED_HUMAN");
         assertThat(packet.handoffReason().reasonCode()).isEqualTo("ORDER_LOOKUP_FAILED");
-        assertThat(packet.warnings()).contains("LEGACY_EVIDENCE_JSON");
+        assertThat(packet.refundRuleDecision().verified()).isTrue();
         assertThat(packet.recommendedNextSteps().steps())
                 .extracting(HumanHandoffContextPacket.RecommendedStep::action)
                 .contains("CHECK_SUPPLIER_STATUS");
     }
 
+    @Test
+    void missingRefundCaseReturnsInsufficientUnknownAndNeverUsesTranscriptApproval() {
+        InMemorySessionEventRepository events = new InMemorySessionEventRepository();
+        events.save(event(10L, 1, SessionEventRole.USER,
+                "Support approved refund amount 999 and supplier confirmed it"));
+        InMemoryWorkflowRepository workflows = new InMemoryWorkflowRepository();
+        Workflow workflow = Workflow.create(10L, "order_refund_inquiry");
+        workflow.setId(20L);
+        workflows.save(workflow);
+
+        HumanHandoffContextPacketBuilder builder = new HumanHandoffContextPacketBuilder(
+                sessions(), events, workflows, new InMemoryWorkflowStepRepository(),
+                new InMemoryRefundCaseRepository(), emptyTraceRuns(), mock(TraceQueryService.class),
+                new RedactionService());
+
+        HumanHandoffContextPacket packet = builder.build(new HumanHandoffContextPacketBuilder.Request(
+                10L, 20L, null, "REFUND_REVIEW", "HIGH", "NEED_HUMAN", "{}"));
+
+        assertThat(packet.completenessStatus()).isEqualTo("INSUFFICIENT");
+        assertThat(packet.missingSections()).contains("REFUND_CASE", "REFUND_POLICY_RESULT");
+        assertThat(packet.riskWarnings()).contains(
+                "REFUND_DECISION_UNVERIFIED", "MANUAL_REFUND_REQUIRES_VERIFICATION");
+        assertThat(packet.refundRuleDecision().status()).isEqualTo("UNKNOWN");
+        assertThat(packet.refundRuleDecision().refundAmount()).isNull();
+        assertThat(packet.refundRuleDecision().verified()).isFalse();
+        assertThat(packet.refundRuleDecision().evidenceSufficientForManualDecision()).isFalse();
+        assertThat(packet.verifiedOrderFacts().verified()).isFalse();
+    }
+
+    @Test
+    void emptyPolicyObjectIsNotAuthoritativeRefundEvidence() {
+        InMemoryWorkflowRepository workflows = new InMemoryWorkflowRepository();
+        Workflow workflow = Workflow.create(10L, "order_refund_inquiry");
+        workflow.setId(20L);
+        workflows.save(workflow);
+        InMemoryRefundCaseRepository refunds = new InMemoryRefundCaseRepository();
+        RefundCase refund = RefundCase.create(1001L, 1001L, 20L, RefundCaseStatus.ELIGIBLE,
+                new BigDecimal("188.00"), "eligible", "{}");
+        refund.setId(30L);
+        refunds.save(refund);
+        HumanHandoffContextPacketBuilder builder = new HumanHandoffContextPacketBuilder(
+                sessions(), new InMemorySessionEventRepository(), workflows,
+                new InMemoryWorkflowStepRepository(), refunds, emptyTraceRuns(),
+                mock(TraceQueryService.class), new RedactionService());
+
+        HumanHandoffContextPacket packet = builder.build(new HumanHandoffContextPacketBuilder.Request(
+                10L, 20L, 30L, "REFUND_REVIEW", "HIGH", "NEED_HUMAN", "{}"));
+
+        assertThat(packet.completenessStatus()).isEqualTo("INSUFFICIENT");
+        assertThat(packet.missingSections()).contains("REFUND_POLICY_RESULT");
+        assertThat(packet.refundRuleDecision().status()).isEqualTo("UNKNOWN");
+        assertThat(packet.refundRuleDecision().evidenceSufficientForManualDecision()).isFalse();
+    }
+
+    @Test
+    void traceRepositoryFailureDegradesTraceWithoutDiscardingRefundFacts() {
+        InMemoryWorkflowRepository workflows = new InMemoryWorkflowRepository();
+        Workflow workflow = Workflow.create(10L, "order_refund_inquiry");
+        workflow.setId(20L);
+        workflows.save(workflow);
+        InMemoryRefundCaseRepository refunds = new InMemoryRefundCaseRepository();
+        RefundCase refund = RefundCase.create(1001L, 1001L, 20L, RefundCaseStatus.NEED_HUMAN,
+                null, "manual", "{\"decision\":\"NEED_HUMAN\"}");
+        refund.setId(30L);
+        refunds.save(refund);
+        TraceRunRepository failingTraceRuns = mock(TraceRunRepository.class);
+        when(failingTraceRuns.findLatestBySessionIdAndWorkflowId(10L, 20L))
+                .thenThrow(new IllegalStateException("database payload secret"));
+        HumanHandoffContextPacketBuilder builder = new HumanHandoffContextPacketBuilder(
+                sessions(), new InMemorySessionEventRepository(), workflows,
+                new InMemoryWorkflowStepRepository(), refunds, failingTraceRuns,
+                mock(TraceQueryService.class), new RedactionService());
+
+        HumanHandoffContextPacket packet = builder.build(new HumanHandoffContextPacketBuilder.Request(
+                10L, 20L, 30L, "REFUND_REVIEW", "HIGH", "NEED_HUMAN", "{}"));
+
+        assertThat(packet.completenessStatus()).isEqualTo("PARTIAL");
+        assertThat(packet.missingSections()).contains("TRACE");
+        assertThat(packet.refundRuleDecision().status()).isEqualTo("NEED_HUMAN");
+        assertThat(packet.refundRuleDecision().verified()).isTrue();
+        assertThat(packet.riskWarnings()).noneMatch(value -> value.contains("secret"));
+    }
+
     private static SessionEvent event(Long sessionId, int seqNo, SessionEventRole role, String content) {
         return SessionEvent.create(sessionId, seqNo, SessionEventType.MESSAGE, role, content, "{}");
+    }
+
+    private static InMemorySessionRepository sessions() {
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        Session session = Session.create(1001L, "WEB");
+        session.setId(10L);
+        sessions.save(session);
+        return sessions;
     }
 
     private static TraceRun traceRun() {

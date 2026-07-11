@@ -12,6 +12,7 @@ import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.conversation.entity.Session;
 import travelcare_agent.conversation.repository.SessionRepository;
+import travelcare_agent.evidence.*;
 import travelcare_agent.retrieval.service.RetrievalQuery;
 import travelcare_agent.retrieval.service.RetrievalService;
 import travelcare_agent.retrieval.service.RetrievalSnippet;
@@ -44,6 +45,12 @@ public class AgentOpsDebugService {
     private final AgentProviderProperties providerProperties;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final RedactionService redactionService = new RedactionService();
+    private DegradationRecorder degradationRecorder;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDegradationRecorder(DegradationRecorder degradationRecorder) {
+        this.degradationRecorder = degradationRecorder;
+    }
 
     public AgentOpsDebugService(SessionRepository sessions, WorkflowRepository workflows,
             TraceRunRepository traceRuns, TraceQueryService traceQueryService, RetrievalService retrievalService,
@@ -63,12 +70,33 @@ public class AgentOpsDebugService {
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "session not found"));
         validateWorkflow(request.sessionId(), request.workflowId());
 
-        Optional<TraceRun> latestTrace = traceRuns.findLatestBySessionIdAndWorkflowId(
-                request.sessionId(), request.workflowId());
-        if (latestTrace.isPresent()) {
-            return fromTrace(request, latestTrace.get());
+        AgentOpsDebugResponse response;
+        try {
+            Optional<TraceRun> latestTrace = traceRuns.findLatestBySessionIdAndWorkflowId(
+                    request.sessionId(), request.workflowId());
+            if (latestTrace.isPresent()) {
+                try {
+                    response = fromTrace(request, latestTrace.get());
+                } catch (RuntimeException ignored) {
+                    response = inMemoryDiagnostic(request, session);
+                }
+            } else {
+                response = inMemoryDiagnostic(request, session);
+            }
+        } catch (RuntimeException ignored) {
+            response = inMemoryDiagnostic(request, session);
         }
-        return inMemoryDiagnostic(request, session);
+        recordDegradation(response);
+        return response;
+    }
+
+    private void recordDegradation(AgentOpsDebugResponse response) {
+        if (degradationRecorder == null) return;
+        CompletenessAssessment assessment = new CompletenessAssessment(
+                CompletenessStatus.valueOf(response.completenessStatus()), response.missingSections(),
+                response.riskWarnings());
+        degradationRecorder.record("AGENTOPS_PARTIAL_EVIDENCE", response.sessionId(), response.workflowId(),
+                "AGENTOPS_DEBUG", null, assessment, response.traceId());
     }
 
     private void validate(AgentOpsDebugRequest request) {
@@ -116,6 +144,27 @@ public class AgentOpsDebugService {
         if (diagnostics.incomplete()) {
             warnings.add("TRACE_INCOMPLETE");
         }
+        boolean citationAvailable = validArraySnapshot(
+                snapshots.get(TraceSnapshotType.CITATION_SUMMARY.name()), "citations");
+        boolean answerabilityAvailable = citationAvailable && validObjectSnapshot(
+                snapshots.get(TraceSnapshotType.ANSWERABILITY_DECISION.name()), "status");
+        List<SectionResult<?>> sections = new ArrayList<>();
+        sections.add(SectionResult.available(run));
+        sections.add(detail.snapshots() == null
+                ? SectionResult.unavailable(false, EvidenceSection.TRACE_SNAPSHOT,
+                        RiskWarning.TRACE_SNAPSHOT_CORRUPTED)
+                : SectionResult.available(true));
+        sections.add(citationAvailable ? SectionResult.available(true)
+                : SectionResult.unavailable(false, EvidenceSection.CITATION,
+                        RiskWarning.CITATION_EVIDENCE_UNAVAILABLE));
+        sections.add(answerabilityAvailable ? SectionResult.available(true)
+                : SectionResult.unavailable(false, EvidenceSection.ANSWERABILITY,
+                        RiskWarning.ANSWERABILITY_UNKNOWN));
+        CompletenessAssessment completeness = CompletenessAssessment.derive(sections);
+        if (!answerabilityAvailable) {
+            answerability = new AgentOpsDebugResponse.AnswerabilityDebug("UNKNOWN", "EVIDENCE_UNAVAILABLE");
+            route = DebugFinalRoute.FALLBACK;
+        }
         return new AgentOpsDebugResponse(
                 request.sessionId(), run.getWorkflowId() == null ? request.workflowId() : run.getWorkflowId(),
                 run.getTraceId(), DEBUG_MODE, DebugEvidenceMode.TRACE_REPLAY, providerMode(run),
@@ -124,16 +173,38 @@ public class AgentOpsDebugService {
                 safeText(request.question()),
                 new AgentOpsDebugResponse.RetrievalDebug(candidates, accepted, rejected),
                 answerability, safety, supplier(false),
-                toolCalls(diagnostics.toolCalls()), route, handoff(route), warnings);
+                toolCalls(diagnostics.toolCalls()), route, handoff(route), warnings,
+                completeness.status().name(), completeness.missingSections(), completeness.riskWarnings(),
+                new AgentOpsDebugResponse.DiagnosticDebug("AVAILABLE", "TRACE_EVIDENCE"));
     }
 
     private AgentOpsDebugResponse inMemoryDiagnostic(AgentOpsDebugRequest request, Session session) {
         List<String> warnings = new ArrayList<>();
         warnings.add("NO_EXISTING_TRACE_FOUND_CURRENT_STATE_DIAGNOSTIC_ONLY");
-        List<RetrievalSnippet> snippets = retrievalService.retrieve(
-                new RetrievalQuery(request.sessionId(), session.getUserId(), request.question(), null, 5));
-        AnswerabilityDecision decision = answerabilityService.assess(new AnswerabilityRequest(
-                request.question(), snippets, null, null, BusinessDecisionContext.none(), java.time.LocalDateTime.now()));
+        List<RetrievalSnippet> snippets;
+        AnswerabilityDecision decision;
+        try {
+            snippets = retrievalService.retrieve(
+                    new RetrievalQuery(request.sessionId(), session.getUserId(), request.question(), null, 5));
+            decision = answerabilityService.assess(new AnswerabilityRequest(
+                    request.question(), snippets, null, null, BusinessDecisionContext.none(), java.time.LocalDateTime.now()));
+        } catch (RuntimeException ex) {
+            CompletenessAssessment unavailable = CompletenessAssessment.derive(List.of(
+                    SectionResult.unavailable(false, EvidenceSection.TRACE, RiskWarning.TRACE_EVIDENCE_UNAVAILABLE),
+                    SectionResult.unavailable(false, EvidenceSection.ANSWERABILITY, RiskWarning.ANSWERABILITY_UNKNOWN),
+                    SectionResult.unavailable(false, EvidenceSection.CITATION, RiskWarning.CITATION_EVIDENCE_UNAVAILABLE)));
+            AgentOpsDebugResponse.AnswerabilityDebug unknown =
+                    new AgentOpsDebugResponse.AnswerabilityDebug("UNKNOWN", "EVIDENCE_UNAVAILABLE");
+            AgentOpsDebugResponse.SafetyDebug safety =
+                    new AgentOpsDebugResponse.SafetyDebug("UNKNOWN", "EVIDENCE_UNAVAILABLE", List.of());
+            return new AgentOpsDebugResponse(request.sessionId(), request.workflowId(), null, DEBUG_MODE,
+                    DebugEvidenceMode.CURRENT_DIAGNOSTIC, providerMode(), "mock", promptVersion(),
+                    safeText(request.question()), new AgentOpsDebugResponse.RetrievalDebug(List.of(), List.of(), List.of()),
+                    unknown, safety, supplier(false), List.of(), DebugFinalRoute.FALLBACK,
+                    handoff(DebugFinalRoute.FALLBACK), warnings, unavailable.status().name(),
+                    unavailable.missingSections(), unavailable.riskWarnings(),
+                    new AgentOpsDebugResponse.DiagnosticDebug("UNKNOWN", null));
+        }
         List<AgentOpsDebugResponse.CitationDebug> candidates = snippets.stream().map(this::citation).toList();
         List<AgentOpsDebugResponse.CitationDebug> accepted = decision.citations().stream()
                 .map(c -> citation(c.retrievalRunId(), c.documentId(), c.chunkId(), c.title(), c.sourceUri(),
@@ -150,13 +221,18 @@ public class AgentOpsDebugService {
         AgentOpsDebugResponse.SafetyDebug safety =
                 new AgentOpsDebugResponse.SafetyDebug("ALLOW", "NO_MODEL_OUTPUT_IN_DRY_RUN", List.of());
         DebugFinalRoute route = mapFinalRoute(safety.decision(), status, requiredAction, false);
+        CompletenessAssessment completeness = CompletenessAssessment.derive(List.of(
+                SectionResult.unavailable(false, EvidenceSection.TRACE, RiskWarning.TRACE_EVIDENCE_UNAVAILABLE),
+                SectionResult.available(true), SectionResult.available(true)));
         return new AgentOpsDebugResponse(
                 request.sessionId(), request.workflowId(), null, DEBUG_MODE, DebugEvidenceMode.CURRENT_DIAGNOSTIC,
                 providerProperties == null || providerProperties.getProvider() == null
                         ? "mock" : providerProperties.getProvider().name().toLowerCase(Locale.ROOT),
                 "mock", promptVersion(), safeText(request.question()),
                 new AgentOpsDebugResponse.RetrievalDebug(candidates, accepted, rejected),
-                answerability, safety, supplier(false), List.of(), route, handoff(route), warnings);
+                answerability, safety, supplier(false), List.of(), route, handoff(route), warnings,
+                completeness.status().name(), completeness.missingSections(), completeness.riskWarnings(),
+                new AgentOpsDebugResponse.DiagnosticDebug("AVAILABLE", "IN_MEMORY_OBSERVATION"));
     }
 
     public static DebugFinalRoute mapFinalRoute(String safetyDecision, String answerabilityStatus,
@@ -174,7 +250,7 @@ public class AgentOpsDebugService {
             return DebugFinalRoute.HANDOFF;
         }
         if ("FALLBACK".equals(safety) || "FALLBACK_REPLY".equals(action) || "UNANSWERABLE".equals(status)
-                || "NOT_ANSWERABLE".equals(status)) {
+                || "NOT_ANSWERABLE".equals(status) || "UNKNOWN".equals(status)) {
             return DebugFinalRoute.FALLBACK;
         }
         return DebugFinalRoute.ALLOW;
@@ -342,6 +418,25 @@ public class AgentOpsDebugService {
                 providerProperties == null || providerProperties.getProvider() == null
                         ? null : providerProperties.getProvider().name().toLowerCase(Locale.ROOT),
                 "mock");
+    }
+
+    private String providerMode() {
+        return providerProperties == null || providerProperties.getProvider() == null
+                ? "mock" : providerProperties.getProvider().name().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean validArraySnapshot(TraceSnapshot snapshot, String field) {
+        if (snapshot == null || snapshot.getPayloadJson() == null) return false;
+        try { return objectMapper.readTree(snapshot.getPayloadJson()).path(field).isArray(); }
+        catch (Exception ex) { return false; }
+    }
+
+    private boolean validObjectSnapshot(TraceSnapshot snapshot, String field) {
+        if (snapshot == null || snapshot.getPayloadJson() == null) return false;
+        try {
+            JsonNode root = objectMapper.readTree(snapshot.getPayloadJson());
+            return root.isObject() && !root.path(field).isMissingNode() && !root.path(field).isNull();
+        } catch (Exception ex) { return false; }
     }
 
     private String promptVersion() {

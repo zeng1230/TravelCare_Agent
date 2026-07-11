@@ -306,8 +306,11 @@ public class EvaluationRunnerService {
             x.handoffPacket = handoffPackets.build(new HumanHandoffContextPacketBuilder.Request(
                     sourceRun.getSessionId(), sourceRun.getWorkflowId(), null, "REFUND_REVIEW", "HIGH",
                     x.supplierFailureCode == null ? "NEED_HUMAN" : x.supplierFailureCode, "{}"));
+            x.approvalAllowed = x.handoffPacket.refundRuleDecision() != null
+                    && x.handoffPacket.refundRuleDecision().evidenceSufficientForManualDecision();
         } catch (RuntimeException ex) {
             x.handoffPacket = null;
+            x.approvalAllowed = false;
         }
     }
 

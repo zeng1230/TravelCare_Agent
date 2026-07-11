@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import travelcare_agent.conversation.entity.SessionEvent;
+import travelcare_agent.conversation.entity.Session;
+import travelcare_agent.conversation.repository.SessionRepository;
 import travelcare_agent.conversation.repository.SessionEventRepository;
 import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.enums.SessionEventRole;
@@ -51,6 +53,7 @@ class Pr3cEvaluationAppliedIntegrationTest {
     @Autowired private TraceService traces;
     @Autowired private ObjectMapper json;
     @Autowired private SessionEventRepository sessionEvents;
+    @Autowired private SessionRepository sessions;
     @Autowired private WorkflowRepository workflows;
     @Autowired private WorkflowStepRepository workflowSteps;
     @Autowired private RefundCaseRepository refundCases;
@@ -123,7 +126,9 @@ class Pr3cEvaluationAppliedIntegrationTest {
 
     private Long createSourceTrace(Scenario scenario) {
         long seed = Math.abs((long) scenario.caseKey().hashCode());
-        Long sessionId = 9_930_000_000_000L + runSalt + seed;
+        Session session = Session.create(USER_ID, "EVALUATION");
+        session = sessions.save(session);
+        Long sessionId = session.getId();
         String userMessage = userMessage(scenario, seed);
         sessionEvents.save(SessionEvent.create(sessionId, 1, SessionEventType.MESSAGE, SessionEventRole.USER,
                 userMessage, "{}"));

@@ -23,9 +23,15 @@ public record HumanReviewCaseResponse(
         String resolvedBy,
         LocalDateTime resolvedAt,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        boolean approvalAllowed
 ) {
     public static HumanReviewCaseResponse from(HumanReviewCase value, HumanHandoffContextPacket contextPacket) {
+        return from(value, contextPacket, false);
+    }
+
+    public static HumanReviewCaseResponse from(HumanReviewCase value, HumanHandoffContextPacket contextPacket,
+            boolean approvalAllowed) {
         return new HumanReviewCaseResponse(
                 value.getId(),
                 value.getSessionId(),
@@ -43,7 +49,8 @@ public record HumanReviewCaseResponse(
                 value.getResolvedBy(),
                 value.getResolvedAt(),
                 value.getCreatedAt(),
-                value.getUpdatedAt()
+                value.getUpdatedAt(),
+                approvalAllowed
         );
     }
 }

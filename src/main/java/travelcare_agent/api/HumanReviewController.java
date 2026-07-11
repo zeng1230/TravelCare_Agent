@@ -7,6 +7,7 @@ import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.Result;
 import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.human.entity.HumanReviewCase;
+import travelcare_agent.human.packet.HumanHandoffContextPacket;
 import travelcare_agent.human.service.HumanReviewService;
 
 import java.util.List;
@@ -67,7 +68,9 @@ public class HumanReviewController {
     }
 
     private HumanReviewCaseResponse response(HumanReviewCase hrCase) {
-        return HumanReviewCaseResponse.from(hrCase, humanReviewService.contextPacket(hrCase));
+        HumanHandoffContextPacket packet = humanReviewService.contextPacket(hrCase);
+        return HumanReviewCaseResponse.from(hrCase, packet,
+                travelcare_agent.human.service.HumanReviewApprovalPolicy.allows(hrCase, packet));
     }
 
     public record AssignRequest(

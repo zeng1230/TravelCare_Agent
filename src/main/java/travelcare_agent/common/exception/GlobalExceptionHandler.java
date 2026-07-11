@@ -73,7 +73,7 @@ public class GlobalExceptionHandler {
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case NOT_FOUND, ORDER_NOT_FOUND, EVALUATION_DATASET_NOT_FOUND, EVALUATION_CASE_NOT_FOUND,
                     EVALUATION_RUN_NOT_FOUND, EVALUATION_REPORT_NOT_FOUND -> HttpStatus.NOT_FOUND;
-            case EVALUATION_CASE_KEY_DUPLICATED -> HttpStatus.CONFLICT;
+            case EVALUATION_CASE_KEY_DUPLICATED, MANUAL_REFUND_VERIFICATION_REQUIRED -> HttpStatus.CONFLICT;
             default -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }

@@ -73,6 +73,11 @@ public class AuditService {
         );
     }
 
+    public AuditLog recordEvidenceDegradation(Long sessionId, Long workflowId, String action,
+            String targetType, Long targetId, String evidenceJson) {
+        return recordSystem(sessionId, workflowId, action, targetType, targetId, null, evidenceJson);
+    }
+
     public AuditLog recordTaskDispatch(Long sessionId, Long workflowId, Long taskId) {
         return recordSystem(
                 sessionId,

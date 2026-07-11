@@ -67,6 +67,7 @@ public class EvaluationRunReportWriter {
         }
         appendPr3cSafetySummary(b, results, scores);
         appendPr4cAdversarialSummary(b, cases, results, scores);
+        appendPr4dPartialBuildSummary(b, results, scores);
         for (EvaluationCaseResult r : results) {
             EvaluationCase c = byId.get(r.getCaseId());
             b.append("\n## Case ").append(r.getCaseKey()).append("\n\n");
@@ -116,6 +117,38 @@ public class EvaluationRunReportWriter {
         if (lines.isEmpty()) return;
         b.append("\n## PR-4C Adversarial Safety Summary\n\n");
         lines.forEach(line -> b.append(line).append("\n"));
+    }
+
+    private void appendPr4dPartialBuildSummary(StringBuilder b, List<EvaluationCaseResult> results,
+            Map<Long, List<ScoreResult>> scores) {
+        List<String> lines = new ArrayList<>();
+        for (EvaluationCaseResult result : results) {
+            scores.getOrDefault(result.getCaseId(), List.of()).stream()
+                    .filter(score -> score.applied() && "partialBuild".equals(score.scorer()))
+                    .findFirst().ifPresent(score -> {
+                        Map<?, ?> actual = score.actual() instanceof Map<?, ?> map ? map : Map.of();
+                        lines.add("- " + result.getCaseKey()
+                                + ": partialBuild=" + (score.passed() ? "PASS" : "FAIL")
+                                + ", completenessStatus=" + value(string(actual.get("completenessStatus")))
+                                + ", missingSections=" + mapValue(actual, "missingSections", List.of())
+                                + ", riskWarnings=" + mapValue(actual, "riskWarnings", List.of())
+                                + ", evidenceSufficientForManualDecision="
+                                + mapValue(actual, "evidenceSufficientForManualDecision", false)
+                                + ", approvalAllowed=" + mapValue(actual, "approvalAllowed", false));
+                    });
+        }
+        if (lines.isEmpty()) return;
+        b.append("\n## PR-4D Partial Build Summary\n\n");
+        lines.forEach(line -> b.append(line).append("\n"));
+    }
+
+    private String string(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private Object mapValue(Map<?, ?> values, String key, Object fallback) {
+        Object value = values.get(key);
+        return value == null ? fallback : value;
     }
 
     private JsonNode expectation(EvaluationCase evaluationCase) {

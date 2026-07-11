@@ -11,12 +11,17 @@ import travelcare_agent.audit.AuditService;
 import travelcare_agent.common.exception.GlobalExceptionHandler;
 import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.conversation.service.SessionEventService;
+import travelcare_agent.conversation.entity.Session;
+import travelcare_agent.conversation.repository.InMemorySessionRepository;
+import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.enums.HumanReviewCaseStatus;
 import travelcare_agent.human.entity.HumanReviewCase;
 import travelcare_agent.human.packet.HumanHandoffContextPacketBuilder;
 import travelcare_agent.human.repository.InMemoryHumanReviewCaseRepository;
 import travelcare_agent.human.service.HumanReviewService;
 import travelcare_agent.refund.repository.InMemoryRefundCaseRepository;
+import travelcare_agent.refund.entity.RefundCase;
+import travelcare_agent.workflow.entity.Workflow;
 import travelcare_agent.workflow.repository.InMemoryWorkflowRepository;
 
 import static org.hamcrest.Matchers.hasSize;
@@ -45,8 +50,15 @@ class HumanReviewControllerTest {
         auditService = mock(AuditService.class);
         workflowRepo = new InMemoryWorkflowRepository();
         refundRepo = new InMemoryRefundCaseRepository();
+        InMemorySessionRepository sessions = new InMemorySessionRepository();
+        Session session = Session.create(1001L, "WEB");
+        session.setId(100L);
+        sessions.save(session);
+        saveWorkflowAndRefund(200L, 300L);
+        saveWorkflowAndRefund(201L, 301L);
         humanReviewService = new HumanReviewService(hrRepo, eventService, auditService, workflowRepo, refundRepo,
                 new HumanHandoffContextPacketBuilder(
+                        sessions,
                         new travelcare_agent.conversation.repository.InMemorySessionEventRepository(),
                         workflowRepo,
                         new travelcare_agent.workflow.repository.InMemoryWorkflowStepRepository(),
@@ -82,8 +94,18 @@ class HumanReviewControllerTest {
                 .andExpect(jsonPath("$.code").value(ResultCode.SUCCESS.code()))
                 .andExpect(jsonPath("$.data.id").value(hrCase.getId().toString()))
                 .andExpect(jsonPath("$.data.status").value(HumanReviewCaseStatus.OPEN.name()))
-                .andExpect(jsonPath("$.data.contextPacket.packetVersion").value("PR-3A-v1"))
+                .andExpect(jsonPath("$.data.contextPacket.packetVersion").value("PR-4D-v1"))
                 .andExpect(jsonPath("$.data.contextPacket.sessionId").value(100));
+    }
+
+    private void saveWorkflowAndRefund(Long workflowId, Long refundId) {
+        Workflow workflow = Workflow.create(100L, "order_refund_inquiry");
+        workflow.setId(workflowId);
+        workflowRepo.save(workflow);
+        RefundCase refund = RefundCase.create(1001L, 10L, workflowId, RefundCaseStatus.NEED_HUMAN,
+                java.math.BigDecimal.TEN, "manual review", "{\"decision\":\"NEED_HUMAN\"}");
+        refund.setId(refundId);
+        refundRepo.save(refund);
     }
 
     @Test

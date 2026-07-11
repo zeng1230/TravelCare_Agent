@@ -19,8 +19,25 @@ public record AgentOpsDebugResponse(
         List<ToolCallDebug> toolCalls,
         DebugFinalRoute finalRoute,
         HumanHandoffRecommendation humanHandoffRecommendation,
-        List<String> diagnosticWarnings
+        List<String> diagnosticWarnings,
+        String completenessStatus,
+        List<String> missingSections,
+        List<String> riskWarnings,
+        DiagnosticDebug diagnostic
 ) {
+    public AgentOpsDebugResponse(Long sessionId, Long workflowId, String traceId, String debugMode,
+            DebugEvidenceMode evidenceMode, String providerMode, String modelProvider, String promptVersion,
+            String question, RetrievalDebug retrieval, AnswerabilityDebug answerability, SafetyDebug safety,
+            SupplierGatewayDebug supplierGateway, List<ToolCallDebug> toolCalls, DebugFinalRoute finalRoute,
+            HumanHandoffRecommendation humanHandoffRecommendation, List<String> diagnosticWarnings) {
+        this(sessionId, workflowId, traceId, debugMode, evidenceMode, providerMode, modelProvider, promptVersion,
+                question, retrieval, answerability, safety, supplierGateway, toolCalls, finalRoute,
+                humanHandoffRecommendation, diagnosticWarnings, "COMPLETE", List.of(), List.of(),
+                new DiagnosticDebug("AVAILABLE", evidenceMode == DebugEvidenceMode.TRACE_REPLAY
+                        ? "TRACE_EVIDENCE" : "IN_MEMORY_OBSERVATION"));
+    }
+
+    public record DiagnosticDebug(String status, String source) { }
     public record RetrievalDebug(
             List<CitationDebug> candidates,
             List<CitationDebug> acceptedCitations,

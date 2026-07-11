@@ -26,6 +26,7 @@ public class EvaluationScoringContext {
     public List<String> safetyRiskFlags = List.of();
     public Boolean supplierGatewayParticipated, providerFallbackUsed;
     public HumanHandoffContextPacket handoffPacket;
+    public Boolean approvalAllowed;
 
     public static Builder builder() {
         return new Builder();

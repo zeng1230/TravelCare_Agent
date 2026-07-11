@@ -26,6 +26,8 @@ import java.util.Optional;
 import java.util.Map;
 
 import travelcare_agent.trace.*;
+import travelcare_agent.evidence.BuildOutcome;
+import travelcare_agent.evidence.DegradationRecorder;
 
 @Service
 public class HumanReviewService {
@@ -37,6 +39,12 @@ public class HumanReviewService {
     private final RefundCaseRepository refundCaseRepository;
     private final TraceService traceService;
     private final HumanHandoffContextPacketBuilder contextPacketBuilder;
+    private DegradationRecorder degradationRecorder;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDegradationRecorder(DegradationRecorder degradationRecorder) {
+        this.degradationRecorder = degradationRecorder;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public HumanReviewService(
@@ -164,6 +172,10 @@ public class HumanReviewService {
         HumanReviewCase hrCase = repository.findById(caseId)
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review case not found: " + caseId));
 
+        if ("APPROVED".equalsIgnoreCase(resolution) && !approvalAllowed(hrCase)) {
+            throw new BusinessException(ResultCode.MANUAL_REFUND_VERIFICATION_REQUIRED);
+        }
+
         hrCase.setStatus(HumanReviewCaseStatus.RESOLVED);
         hrCase.setResolution(resolution);
         hrCase.setResolutionNote(resolutionNote);
@@ -238,7 +250,13 @@ public class HumanReviewService {
         if (contextPacketBuilder == null) {
             return null;
         }
-        return contextPacketBuilder.fromStoredEvidence(hrCase);
+        BuildOutcome<HumanHandoffContextPacket> outcome = contextPacketBuilder.fromStoredEvidenceOutcome(hrCase);
+        recordDegradation(hrCase.getSessionId(), hrCase.getWorkflowId(), hrCase.getId(), outcome);
+        return outcome.value();
+    }
+
+    public boolean approvalAllowed(HumanReviewCase hrCase) {
+        return HumanReviewApprovalPolicy.allows(hrCase, contextPacket(hrCase));
     }
 
     public Optional<HumanReviewCase> findByWorkflowId(Long workflowId) {
@@ -250,7 +268,16 @@ public class HumanReviewService {
         if (contextPacketBuilder == null) {
             return evidenceJson == null ? "{}" : evidenceJson;
         }
-        return contextPacketBuilder.buildJson(new HumanHandoffContextPacketBuilder.Request(
-                sessionId, workflowId, refundCaseId, caseType, priority, reasonCode, evidenceJson));
+        BuildOutcome<HumanHandoffContextPacket> outcome = contextPacketBuilder.buildOutcome(
+                new HumanHandoffContextPacketBuilder.Request(sessionId, workflowId, refundCaseId, caseType,
+                        priority, reasonCode, evidenceJson));
+        recordDegradation(sessionId, workflowId, refundCaseId, outcome);
+        return contextPacketBuilder.toJson(outcome.value());
+    }
+
+    private void recordDegradation(Long sessionId, Long workflowId, Long targetId,
+            BuildOutcome<HumanHandoffContextPacket> outcome) {
+        if (degradationRecorder != null) degradationRecorder.record("HANDOFF_PACKET_PARTIAL_BUILD",
+                sessionId, workflowId, "HANDOFF_PACKET", targetId, outcome.completeness(), outcome.availableTraceId());
     }
 }

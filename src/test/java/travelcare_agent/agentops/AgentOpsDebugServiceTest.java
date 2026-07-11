@@ -122,6 +122,11 @@ class AgentOpsDebugServiceTest {
 
         assertThat(response.traceId()).isNull();
         assertThat(response.evidenceMode()).isEqualTo(DebugEvidenceMode.CURRENT_DIAGNOSTIC);
+        assertThat(response.completenessStatus()).isEqualTo("PARTIAL");
+        assertThat(response.missingSections()).contains("TRACE");
+        assertThat(response.riskWarnings()).contains("TRACE_EVIDENCE_UNAVAILABLE");
+        assertThat(response.diagnostic().status()).isEqualTo("AVAILABLE");
+        assertThat(response.diagnostic().source()).isEqualTo("IN_MEMORY_OBSERVATION");
         assertThat(response.providerMode()).isEqualTo("mock");
         assertThat(response.retrieval().candidates()).singleElement()
                 .satisfies(candidate -> assertThat(candidate.sourceUri()).isEqualTo("https://example.com/current?ok=1"));
@@ -129,6 +134,24 @@ class AgentOpsDebugServiceTest {
         assertThat(response.finalRoute()).isEqualTo(DebugFinalRoute.ALLOW);
         assertThat(response.diagnosticWarnings()).contains("NO_EXISTING_TRACE_FOUND_CURRENT_STATE_DIAGNOSTIC_ONLY");
         verify(retrievalService).retrieve(any(RetrievalQuery.class));
+    }
+
+    @Test
+    void returnsUnknownFallbackWhenTraceAndCurrentObservationAreUnavailable() {
+        RetrievalService retrievalService = mock(RetrievalService.class);
+        when(retrievalService.retrieve(any(RetrievalQuery.class))).thenThrow(new IllegalStateException("raw secret"));
+        AgentOpsDebugService service = service(mock(TraceQueryService.class), Optional.empty(), List.of(), retrievalService);
+
+        AgentOpsDebugResponse response = service.debug(new AgentOpsDebugRequest(10L, null, "refund rules?", true));
+
+        assertThat(response.traceId()).isNull();
+        assertThat(response.completenessStatus()).isEqualTo("PARTIAL");
+        assertThat(response.missingSections()).contains("TRACE", "ANSWERABILITY", "CITATION");
+        assertThat(response.answerability().decision()).isEqualTo("UNKNOWN");
+        assertThat(response.diagnostic().status()).isEqualTo("UNKNOWN");
+        assertThat(response.diagnostic().source()).isNull();
+        assertThat(response.finalRoute()).isEqualTo(DebugFinalRoute.FALLBACK);
+        assertThat(response.diagnosticWarnings()).noneMatch(value -> value.contains("raw secret"));
     }
 
     @Test
