@@ -9,9 +9,9 @@ import java.util.Optional;
 public interface HumanReviewCaseRepository {
     HumanReviewCase save(HumanReviewCase hrCase);
 
-    Optional<HumanReviewCase> findById(Long id);
+    Optional<HumanReviewCase> findByIdAndTenantId(Long id, String tenantId);
 
-    List<HumanReviewCase> findByStatus(HumanReviewCaseStatus status);
+    List<HumanReviewCase> findByTenantIdAndStatus(String tenantId, HumanReviewCaseStatus status);
 
-    Optional<HumanReviewCase> findByWorkflowId(Long workflowId);
+    Optional<HumanReviewCase> findByWorkflowIdAndTenantId(Long workflowId, String tenantId);
 }

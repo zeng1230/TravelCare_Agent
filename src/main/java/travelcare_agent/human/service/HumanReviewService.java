@@ -5,6 +5,7 @@ import org.springframework.transaction.annotation.Transactional;
 import travelcare_agent.audit.AuditService;
 import travelcare_agent.conversation.service.SessionEventService;
 import travelcare_agent.enums.HumanReviewCaseStatus;
+import travelcare_agent.enums.HumanReviewResolution;
 import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.enums.SessionEventRole;
 import travelcare_agent.enums.WorkflowStatus;
@@ -16,6 +17,10 @@ import travelcare_agent.refund.entity.RefundCase;
 import travelcare_agent.refund.repository.RefundCaseRepository;
 import travelcare_agent.workflow.entity.Workflow;
 import travelcare_agent.workflow.repository.WorkflowRepository;
+import travelcare_agent.conversation.entity.Session;
+import travelcare_agent.conversation.repository.SessionRepository;
+import travelcare_agent.security.AuthorizationService;
+import travelcare_agent.security.CurrentUser;
 
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
@@ -39,6 +44,8 @@ public class HumanReviewService {
     private final RefundCaseRepository refundCaseRepository;
     private final TraceService traceService;
     private final HumanHandoffContextPacketBuilder contextPacketBuilder;
+    private final SessionRepository sessionRepository;
+    private final AuthorizationService authorizationService;
     private DegradationRecorder degradationRecorder;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -54,7 +61,9 @@ public class HumanReviewService {
             WorkflowRepository workflowRepository,
             RefundCaseRepository refundCaseRepository,
             TraceService traceService,
-            HumanHandoffContextPacketBuilder contextPacketBuilder
+            HumanHandoffContextPacketBuilder contextPacketBuilder,
+            SessionRepository sessionRepository,
+            AuthorizationService authorizationService
     ) {
         this.repository = repository;
         this.eventService = eventService;
@@ -63,6 +72,8 @@ public class HumanReviewService {
         this.refundCaseRepository = refundCaseRepository;
         this.traceService = traceService;
         this.contextPacketBuilder = contextPacketBuilder;
+        this.sessionRepository = sessionRepository;
+        this.authorizationService = authorizationService;
     }
 
     public HumanReviewService(
@@ -73,7 +84,7 @@ public class HumanReviewService {
             RefundCaseRepository refundCaseRepository,
             TraceService traceService
     ) {
-        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, traceService, null);
+        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, traceService, null, null, null);
     }
 
     public HumanReviewService(
@@ -84,12 +95,12 @@ public class HumanReviewService {
             RefundCaseRepository refundCaseRepository,
             HumanHandoffContextPacketBuilder contextPacketBuilder
     ) {
-        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null, contextPacketBuilder);
+        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null, contextPacketBuilder, null, null);
     }
 
     public HumanReviewService(HumanReviewCaseRepository repository, SessionEventService eventService,
                               AuditService auditService, WorkflowRepository workflowRepository, RefundCaseRepository refundCaseRepository) {
-        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null, null);
+        this(repository, eventService, auditService, workflowRepository, refundCaseRepository, null, null, null, null);
     }
 
     @Transactional
@@ -103,12 +114,14 @@ public class HumanReviewService {
             String evidenceJson
     ) {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.HUMAN_REVIEW_WRITE);
+        ResourceGraph graph = validateResourceGraph(sessionId, workflowId, refundCaseId, null);
         TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
                 : traceService.startSpan(SpanType.HUMAN_REVIEW, "create-human-review", Map.of("reasonCode", reasonCode));
         if (traceService != null)
             traceService.recordEvent(span.traceId(), span.spanId(), TraceEventType.HANDOFF_REQUIRED,
                     "handoff-required", Map.of("reasonCode", reasonCode));
         HumanReviewCase hrCase = new HumanReviewCase();
+        hrCase.setTenantId(graph.session().getTenantId());
         hrCase.setSessionId(sessionId);
         hrCase.setWorkflowId(workflowId);
         hrCase.setRefundCaseId(refundCaseId);
@@ -122,14 +135,13 @@ public class HumanReviewService {
 
         hrCase = repository.save(hrCase);
 
-        auditService.recordOperator(
+        auditService.recordSystem(
+                graph.session().getTenantId(),
                 sessionId,
                 workflowId,
                 "CREATE",
                 "HUMAN_REVIEW_CASE",
                 hrCase.getId(),
-                "SYSTEM",
-                "system",
                 "{\"status\":\"OPEN\"}",
                 "{\"reasonCode\":\"" + reasonCode + "\"}"
         );
@@ -140,26 +152,30 @@ public class HumanReviewService {
     }
 
     @Transactional
-    public HumanReviewCase assignCase(Long caseId, String operatorId) {
+    public HumanReviewCase assignCase(Long caseId) {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.HUMAN_REVIEW_WRITE);
-        HumanReviewCase hrCase = repository.findById(caseId)
+        CurrentUser actor = currentUser();
+        HumanReviewCase hrCase = repository.findByIdAndTenantId(caseId, actor.tenantId())
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review case not found: " + caseId));
+        validateResourceGraph(hrCase.getSessionId(), hrCase.getWorkflowId(), hrCase.getRefundCaseId(), actor.tenantId());
+        if (hrCase.getStatus() != HumanReviewCaseStatus.OPEN) {
+            throw new BusinessException(ResultCode.HUMAN_REVIEW_STATE_CONFLICT,
+                    "Human review case cannot be assigned from status " + hrCase.getStatus());
+        }
 
         hrCase.setStatus(HumanReviewCaseStatus.ASSIGNED);
-        hrCase.setAssignedTo(operatorId);
+        hrCase.setAssignedTo(actor.userId().toString());
         hrCase.setUpdatedAt(LocalDateTime.now());
 
         hrCase = repository.save(hrCase);
 
-        auditService.recordOperator(
+        auditService.recordAuthenticatedOperator(
                 hrCase.getSessionId(),
                 hrCase.getWorkflowId(),
                 "ASSIGN",
                 "HUMAN_REVIEW_CASE",
                 hrCase.getId(),
-                "OPERATOR",
-                operatorId,
-                "{\"status\":\"ASSIGNED\",\"assignedTo\":\"" + operatorId + "\"}",
+                "{\"status\":\"ASSIGNED\",\"assignedTo\":\"" + actor.userId() + "\"}",
                 "{}"
         );
 
@@ -167,33 +183,39 @@ public class HumanReviewService {
     }
 
     @Transactional
-    public HumanReviewCase resolveCase(Long caseId, String resolution, String resolutionNote, String operatorId) {
+    public HumanReviewCase resolveCase(Long caseId, HumanReviewResolution resolution, String resolutionNote) {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.HUMAN_REVIEW_WRITE);
-        HumanReviewCase hrCase = repository.findById(caseId)
+        CurrentUser actor = currentUser();
+        HumanReviewCase hrCase = repository.findByIdAndTenantId(caseId, actor.tenantId())
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review case not found: " + caseId));
+        ResourceGraph graph = validateResourceGraph(hrCase.getSessionId(), hrCase.getWorkflowId(),
+                hrCase.getRefundCaseId(), actor.tenantId());
+        if (hrCase.getStatus() != HumanReviewCaseStatus.OPEN
+                && hrCase.getStatus() != HumanReviewCaseStatus.ASSIGNED) {
+            throw new BusinessException(ResultCode.HUMAN_REVIEW_STATE_CONFLICT,
+                    "Human review case cannot be resolved from status " + hrCase.getStatus());
+        }
 
-        if ("APPROVED".equalsIgnoreCase(resolution) && !approvalAllowed(hrCase)) {
+        if (resolution == HumanReviewResolution.APPROVED && !approvalAllowed(hrCase)) {
             throw new BusinessException(ResultCode.MANUAL_REFUND_VERIFICATION_REQUIRED);
         }
 
         hrCase.setStatus(HumanReviewCaseStatus.RESOLVED);
         hrCase.setResolution(resolution);
         hrCase.setResolutionNote(resolutionNote);
-        hrCase.setResolvedBy(operatorId);
+        hrCase.setResolvedBy(actor.userId().toString());
         hrCase.setResolvedAt(LocalDateTime.now());
         hrCase.setUpdatedAt(LocalDateTime.now());
 
         hrCase = repository.save(hrCase);
 
         // Audit resolve action
-        auditService.recordOperator(
+        auditService.recordAuthenticatedOperator(
                 hrCase.getSessionId(),
                 hrCase.getWorkflowId(),
                 "RESOLVE",
                 "HUMAN_REVIEW_CASE",
                 hrCase.getId(),
-                "OPERATOR",
-                operatorId,
                 "{\"status\":\"RESOLVED\",\"resolution\":\"" + resolution + "\"}",
                 "{\"resolutionNote\":\"" + (resolutionNote == null ? "" : resolutionNote) + "\"}"
         );
@@ -209,40 +231,43 @@ public class HumanReviewService {
         }
 
         // Update corresponding workflow status
-        Optional<Workflow> workflowOpt = workflowRepository.findById(hrCase.getWorkflowId());
-        if (workflowOpt.isPresent()) {
-            Workflow workflow = workflowOpt.get();
-            WorkflowStatus targetStatus = "APPROVED".equalsIgnoreCase(resolution) ? WorkflowStatus.RESPONDED : WorkflowStatus.FAILED;
-            workflow.transitionTo(targetStatus, "RESOLVED", "{\"resolution\":\"" + resolution + "\",\"note\":\"" + (resolutionNote == null ? "" : resolutionNote) + "\"}");
-            workflowRepository.save(workflow);
-        }
+        Workflow workflow = graph.workflow();
+        WorkflowStatus targetStatus = resolution == HumanReviewResolution.APPROVED
+                ? WorkflowStatus.RESPONDED : WorkflowStatus.FAILED;
+        workflow.transitionTo(targetStatus, "RESOLVED", "{\"resolution\":\"" + resolution
+                + "\",\"note\":\"" + (resolutionNote == null ? "" : resolutionNote) + "\"}");
+        workflowRepository.save(workflow);
 
         // Update corresponding refund case status
-        if (hrCase.getRefundCaseId() != null) {
-            Optional<RefundCase> refundCaseOpt = refundCaseRepository.findById(hrCase.getRefundCaseId());
-            if (refundCaseOpt.isPresent()) {
-                RefundCase refundCase = refundCaseOpt.get();
-                RefundCaseStatus targetStatus = "APPROVED".equalsIgnoreCase(resolution) ? RefundCaseStatus.ELIGIBLE : RefundCaseStatus.INELIGIBLE;
-                refundCase.setStatus(targetStatus);
-                refundCase.setUpdatedAt(LocalDateTime.now());
-                refundCaseRepository.save(refundCase);
-            }
+        if (graph.refundCase() != null) {
+            RefundCase refundCase = graph.refundCase();
+            RefundCaseStatus refundTargetStatus = resolution == HumanReviewResolution.APPROVED
+                    ? RefundCaseStatus.ELIGIBLE : RefundCaseStatus.INELIGIBLE;
+            refundCase.setStatus(refundTargetStatus);
+            refundCase.setUpdatedAt(LocalDateTime.now());
+            refundCaseRepository.save(refundCase);
         }
 
         return hrCase;
     }
 
     public List<HumanReviewCase> listOpenCases() {
-        return repository.findByStatus(HumanReviewCaseStatus.OPEN);
+        return repository.findByTenantIdAndStatus(currentUser().tenantId(), HumanReviewCaseStatus.OPEN);
     }
 
     public Optional<HumanReviewCase> getCase(Long caseId) {
-        return repository.findById(caseId);
+        CurrentUser actor = currentUser();
+        Optional<HumanReviewCase> result = repository.findByIdAndTenantId(caseId, actor.tenantId());
+        result.ifPresent(hrCase -> validateResourceGraph(hrCase.getSessionId(), hrCase.getWorkflowId(),
+                hrCase.getRefundCaseId(), actor.tenantId()));
+        return result;
     }
 
     public HumanHandoffContextPacket getContextPacket(Long caseId) {
-        HumanReviewCase hrCase = repository.findById(caseId)
+        CurrentUser actor = currentUser();
+        HumanReviewCase hrCase = repository.findByIdAndTenantId(caseId, actor.tenantId())
                 .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review case not found: " + caseId));
+        validateResourceGraph(hrCase.getSessionId(), hrCase.getWorkflowId(), hrCase.getRefundCaseId(), actor.tenantId());
         return contextPacket(hrCase);
     }
 
@@ -260,8 +285,45 @@ public class HumanReviewService {
     }
 
     public Optional<HumanReviewCase> findByWorkflowId(Long workflowId) {
-        return repository.findByWorkflowId(workflowId);
+        CurrentUser actor = currentUser();
+        return repository.findByWorkflowIdAndTenantId(workflowId, actor.tenantId());
     }
+
+    private CurrentUser currentUser() {
+        if (authorizationService == null) {
+            throw new IllegalStateException("AuthorizationService is required for Human Review access");
+        }
+        return authorizationService.currentUser();
+    }
+
+    private ResourceGraph validateResourceGraph(Long sessionId, Long workflowId, Long refundCaseId,
+                                                String expectedTenantId) {
+        if (sessionRepository == null) {
+            throw new IllegalStateException("SessionRepository is required for Human Review resource validation");
+        }
+        Session session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review resource not found"));
+        if (expectedTenantId != null && !expectedTenantId.equals(session.getTenantId())) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "Human review resource not found");
+        }
+        Workflow workflow = workflowRepository.findById(workflowId)
+                .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review resource not found"));
+        if (!sessionId.equals(workflow.getSessionId())) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "Human review resource not found");
+        }
+        RefundCase refundCase = null;
+        if (refundCaseId != null) {
+            refundCase = refundCaseRepository.findById(refundCaseId)
+                    .orElseThrow(() -> new BusinessException(ResultCode.NOT_FOUND, "Human review resource not found"));
+            if (!session.getTenantId().equals(refundCase.getTenantId())
+                    || !workflowId.equals(refundCase.getWorkflowId())) {
+                throw new BusinessException(ResultCode.NOT_FOUND, "Human review resource not found");
+            }
+        }
+        return new ResourceGraph(session, workflow, refundCase);
+    }
+
+    private record ResourceGraph(Session session, Workflow workflow, RefundCase refundCase) {}
 
     private String contextPacketJson(Long sessionId, Long workflowId, Long refundCaseId, String caseType,
             String priority, String reasonCode, String evidenceJson) {

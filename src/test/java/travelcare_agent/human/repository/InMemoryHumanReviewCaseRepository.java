@@ -30,21 +30,24 @@ public class InMemoryHumanReviewCaseRepository implements HumanReviewCaseReposit
     }
 
     @Override
-    public Optional<HumanReviewCase> findById(Long id) {
-        return Optional.ofNullable(cases.get(id));
+    public Optional<HumanReviewCase> findByIdAndTenantId(Long id, String tenantId) {
+        return Optional.ofNullable(cases.get(id))
+                .filter(c -> tenantId.equals(c.getTenantId()));
     }
 
     @Override
-    public List<HumanReviewCase> findByStatus(HumanReviewCaseStatus status) {
+    public List<HumanReviewCase> findByTenantIdAndStatus(String tenantId, HumanReviewCaseStatus status) {
         return cases.values().stream()
+                .filter(c -> tenantId.equals(c.getTenantId()))
                 .filter(c -> c.getStatus() == status)
                 .collect(Collectors.toList());
     }
 
     @Override
-    public Optional<HumanReviewCase> findByWorkflowId(Long workflowId) {
+    public Optional<HumanReviewCase> findByWorkflowIdAndTenantId(Long workflowId, String tenantId) {
         return cases.values().stream()
                 .filter(c -> workflowId.equals(c.getWorkflowId()))
+                .filter(c -> tenantId.equals(c.getTenantId()))
                 .findFirst();
     }
 }

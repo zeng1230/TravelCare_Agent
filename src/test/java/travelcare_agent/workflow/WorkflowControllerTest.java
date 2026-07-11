@@ -81,6 +81,7 @@ class WorkflowControllerTest {
         refundRepo.save(refundCase);
 
         HumanReviewCase hrCase = new HumanReviewCase();
+        hrCase.setTenantId("default");
         hrCase.setWorkflowId(workflow.getId());
         hrCase.setSessionId(100L);
         hrCase.setCaseType("REFUND_REVIEW");

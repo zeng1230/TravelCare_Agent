@@ -104,7 +104,10 @@ public class WorkflowController {
         Long taskId = taskRepository.findByWorkflowId(workflow.getId())
                 .map(WorkflowTask::getId)
                 .orElse(null);
-        Long hrCaseId = hrCaseRepository.findByWorkflowId(workflow.getId())
+        String tenantId = authorizationService == null
+                ? "default"
+                : authorizationService.currentUser().tenantId();
+        Long hrCaseId = hrCaseRepository.findByWorkflowIdAndTenantId(workflow.getId(), tenantId)
                 .map(HumanReviewCase::getId)
                 .orElse(null);
         Long refundCaseId = refundCaseRepository.findByWorkflowId(workflow.getId())

@@ -5,8 +5,31 @@ import travelcare_agent.audit.entity.AuditLog;
 import travelcare_agent.audit.repository.InMemoryAuditLogRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import travelcare_agent.security.CurrentUser;
+import travelcare_agent.security.SecurityContextFacade;
+import java.util.Set;
 
 class AuditServiceTest {
+
+    @Test
+    void authenticatedOperatorIdentityComesFromSecurityContext() {
+        InMemoryAuditLogRepository repository = new InMemoryAuditLogRepository();
+        AuditService auditService = new AuditService(repository, null, new SecurityContextFacade());
+        CurrentUser currentUser = new CurrentUser(4004L, "tenant-a", Set.of("OPERATOR"));
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(currentUser, null));
+        try {
+            AuditLog log = auditService.recordAuthenticatedOperator(
+                    101L, 201L, "ASSIGN", "HUMAN_REVIEW_CASE", 301L, "{}", "{}");
+            assertThat(log.getActorType()).isEqualTo("OPERATOR");
+            assertThat(log.getActorId()).isEqualTo("4004");
+            assertThat(log.getTenantId()).isEqualTo("tenant-a");
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
+    }
 
     @Test
     void recordsAndQueriesAuditLogsForTraceability() {

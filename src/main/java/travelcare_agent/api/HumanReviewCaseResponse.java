@@ -44,7 +44,7 @@ public record HumanReviewCaseResponse(
                 value.getEvidenceJson(),
                 contextPacket,
                 value.getAssignedTo(),
-                value.getResolution(),
+                value.getResolution() == null ? null : value.getResolution().name(),
                 value.getResolutionNote(),
                 value.getResolvedBy(),
                 value.getResolvedAt(),

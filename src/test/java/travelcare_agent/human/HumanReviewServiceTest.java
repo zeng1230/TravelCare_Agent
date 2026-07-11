@@ -9,6 +9,7 @@ import travelcare_agent.conversation.repository.InMemorySessionRepository;
 import travelcare_agent.common.exception.BusinessException;
 import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.enums.HumanReviewCaseStatus;
+import travelcare_agent.enums.HumanReviewResolution;
 import travelcare_agent.enums.RefundCaseStatus;
 import travelcare_agent.enums.SessionEventRole;
 import travelcare_agent.enums.WorkflowStatus;
@@ -17,6 +18,8 @@ import travelcare_agent.human.packet.HumanHandoffContextPacket;
 import travelcare_agent.human.packet.HumanHandoffContextPacketBuilder;
 import travelcare_agent.human.repository.InMemoryHumanReviewCaseRepository;
 import travelcare_agent.human.service.HumanReviewService;
+import travelcare_agent.security.AuthorizationService;
+import travelcare_agent.security.CurrentUser;
 import travelcare_agent.refund.entity.RefundCase;
 import travelcare_agent.refund.repository.InMemoryRefundCaseRepository;
 import travelcare_agent.workflow.entity.Workflow;
@@ -24,6 +27,7 @@ import travelcare_agent.workflow.repository.InMemoryWorkflowRepository;
 
 import java.math.BigDecimal;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -39,6 +43,7 @@ class HumanReviewServiceTest {
     private InMemoryRefundCaseRepository refundCaseRepository;
     private InMemorySessionRepository sessionRepository;
     private HumanReviewService humanReviewService;
+    private AuthorizationService authorizationService;
 
     @BeforeEach
     void setUp() {
@@ -51,10 +56,16 @@ class HumanReviewServiceTest {
         Session session = Session.create(1001L, "WEB");
         session.setId(100L);
         sessionRepository.save(session);
+        authorizationService = mock(AuthorizationService.class);
+        when(authorizationService.currentUser()).thenReturn(new CurrentUser(45L, "default", Set.of("OPERATOR")));
         Workflow defaultWorkflow = Workflow.create(100L, "order_refund_inquiry");
         defaultWorkflow.setId(200L);
         defaultWorkflow.setStatus(WorkflowStatus.NEED_HUMAN);
         workflowRepository.save(defaultWorkflow);
+        RefundCase defaultRefund = RefundCase.create(1001L, 10L, 200L, RefundCaseStatus.NEED_HUMAN,
+                BigDecimal.TEN, "need manual check", "{\"decision\":\"NEED_HUMAN\"}");
+        defaultRefund.setId(300L);
+        refundCaseRepository.save(defaultRefund);
 
         humanReviewService = new HumanReviewService(
                 hrCaseRepository,
@@ -62,6 +73,7 @@ class HumanReviewServiceTest {
                 auditService,
                 workflowRepository,
                 refundCaseRepository,
+                null,
                 new HumanHandoffContextPacketBuilder(
                         sessionRepository,
                         new travelcare_agent.conversation.repository.InMemorySessionEventRepository(),
@@ -70,7 +82,9 @@ class HumanReviewServiceTest {
                         refundCaseRepository,
                         emptyTraceRuns(),
                         mock(travelcare_agent.trace.TraceQueryService.class),
-                        new travelcare_agent.trace.RedactionService())
+                        new travelcare_agent.trace.RedactionService()),
+                sessionRepository,
+                authorizationService
         );
     }
 
@@ -91,9 +105,10 @@ class HumanReviewServiceTest {
         assertThat(hrCase.getEvidenceJson()).contains("\"packetVersion\":\"PR-4D-v1\"");
         assertThat(hrCase.getEvidenceJson()).contains("\"packetMode\":\"MATERIALIZED\"");
 
-        verify(auditService).recordOperator(
+        verify(auditService).recordSystem(
+                eq("default"),
                 eq(100L), eq(200L), eq("CREATE"), eq("HUMAN_REVIEW_CASE"),
-                eq(hrCase.getId()), eq("SYSTEM"), eq("system"), anyString(), anyString()
+                eq(hrCase.getId()), anyString(), anyString()
         );
     }
 
@@ -123,33 +138,81 @@ class HumanReviewServiceTest {
                 "REFUND_REVIEW", "HIGH", "PAID_TIMEOUT", "{}"
         );
 
-        HumanReviewCase assignedCase = humanReviewService.assignCase(hrCase.getId(), "operator-45");
+        HumanReviewCase assignedCase = humanReviewService.assignCase(hrCase.getId());
 
         assertThat(assignedCase.getStatus()).isEqualTo(HumanReviewCaseStatus.ASSIGNED);
-        assertThat(assignedCase.getAssignedTo()).isEqualTo("operator-45");
+        assertThat(assignedCase.getAssignedTo()).isEqualTo("45");
 
-        verify(auditService).recordOperator(
+        verify(auditService).recordAuthenticatedOperator(
                 eq(100L), eq(200L), eq("ASSIGN"), eq("HUMAN_REVIEW_CASE"),
-                eq(hrCase.getId()), eq("OPERATOR"), eq("operator-45"), anyString(), anyString()
+                eq(hrCase.getId()), anyString(), anyString()
         );
     }
 
     @Test
-    void approvedResolutionIsBlockedBeforeWritesWhenRefundEvidenceIsInsufficient() {
+    void tenantBoundaryHidesCaseAndListFromAnotherTenant() {
         HumanReviewCase hrCase = humanReviewService.createCase(
-                100L, 200L, null, "REFUND_REVIEW", "HIGH", "NEED_HUMAN", "{}"
+                100L, 200L, 300L, "REFUND_REVIEW", "HIGH", "PAID_TIMEOUT", "{}");
+        when(authorizationService.currentUser()).thenReturn(
+                new CurrentUser(46L, "tenant-b", Set.of("OPERATOR")));
+
+        assertThat(humanReviewService.getCase(hrCase.getId())).isEmpty();
+        assertThat(humanReviewService.listOpenCases()).isEmpty();
+        assertThatThrownBy(() -> humanReviewService.assignCase(hrCase.getId()))
+                .isInstanceOf(BusinessException.class)
+                .extracting(error -> ((BusinessException) error).getResultCode())
+                .isEqualTo(ResultCode.NOT_FOUND);
+    }
+
+    @Test
+    void repeatedAssignmentFailsBeforeAuditWrite() {
+        HumanReviewCase hrCase = humanReviewService.createCase(
+                100L, 200L, 300L, "REFUND_REVIEW", "HIGH", "PAID_TIMEOUT", "{}");
+        humanReviewService.assignCase(hrCase.getId());
+        clearInvocations(auditService);
+
+        assertThatThrownBy(() -> humanReviewService.assignCase(hrCase.getId()))
+                .isInstanceOf(BusinessException.class)
+                .extracting(error -> ((BusinessException) error).getResultCode())
+                .isEqualTo(ResultCode.HUMAN_REVIEW_STATE_CONFLICT);
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void creationRejectsSameTenantResourcesWithWrongRelationshipBeforeAudit() {
+        Workflow wrongWorkflow = Workflow.create(999L, "order_refund_inquiry");
+        wrongWorkflow.setId(203L);
+        workflowRepository.save(wrongWorkflow);
+        clearInvocations(auditService);
+
+        assertThatThrownBy(() -> humanReviewService.createCase(
+                100L, 203L, null, "REFUND_REVIEW", "HIGH", "NEED_HUMAN", "{}"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(error -> ((BusinessException) error).getResultCode())
+                .isEqualTo(ResultCode.NOT_FOUND);
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void approvedResolutionIsBlockedBeforeWritesWhenRefundEvidenceIsInsufficient() {
+        Workflow workflowWithoutRefund = Workflow.create(100L, "order_refund_inquiry");
+        workflowWithoutRefund.setId(202L);
+        workflowWithoutRefund.setStatus(WorkflowStatus.NEED_HUMAN);
+        workflowRepository.save(workflowWithoutRefund);
+        HumanReviewCase hrCase = humanReviewService.createCase(
+                100L, 202L, null, "REFUND_REVIEW", "HIGH", "NEED_HUMAN", "{}"
         );
 
         assertThat(humanReviewService.approvalAllowed(hrCase)).isFalse();
         assertThatThrownBy(() -> humanReviewService.resolveCase(
-                hrCase.getId(), "APPROVED", "approved from transcript", "operator-45"))
+                hrCase.getId(), HumanReviewResolution.APPROVED, "approved from transcript"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(error -> ((BusinessException) error).getResultCode())
                 .isEqualTo(ResultCode.MANUAL_REFUND_VERIFICATION_REQUIRED);
 
-        assertThat(hrCaseRepository.findById(hrCase.getId()).orElseThrow().getStatus())
+        assertThat(hrCaseRepository.findByIdAndTenantId(hrCase.getId(), "default").orElseThrow().getStatus())
                 .isEqualTo(HumanReviewCaseStatus.OPEN);
-        assertThat(workflowRepository.findById(200L).orElseThrow().getStatus())
+        assertThat(workflowRepository.findById(202L).orElseThrow().getStatus())
                 .isEqualTo(WorkflowStatus.NEED_HUMAN);
         verify(eventService, never()).appendMessage(anyLong(), any(), anyString(), anyString());
     }
@@ -174,13 +237,13 @@ class HumanReviewServiceTest {
         assertThat(humanReviewService.approvalAllowed(hrCase)).isTrue();
 
         HumanReviewCase resolvedCase = humanReviewService.resolveCase(
-                hrCase.getId(), "APPROVED", "The refund looks correct, approved.", "operator-45"
+                hrCase.getId(), HumanReviewResolution.APPROVED, "The refund looks correct, approved."
         );
 
         assertThat(resolvedCase.getStatus()).isEqualTo(HumanReviewCaseStatus.RESOLVED);
-        assertThat(resolvedCase.getResolution()).isEqualTo("APPROVED");
+        assertThat(resolvedCase.getResolution()).isEqualTo(HumanReviewResolution.APPROVED);
         assertThat(resolvedCase.getResolutionNote()).isEqualTo("The refund looks correct, approved.");
-        assertThat(resolvedCase.getResolvedBy()).isEqualTo("operator-45");
+        assertThat(resolvedCase.getResolvedBy()).isEqualTo("45");
         assertThat(resolvedCase.getResolvedAt()).isNotNull();
 
         // Check if event was appended to session event stream
@@ -202,9 +265,9 @@ class HumanReviewServiceTest {
         assertThat(updatedRefundCase.get().getStatus()).isEqualTo(RefundCaseStatus.ELIGIBLE);
 
         // Verify audit logging
-        verify(auditService).recordOperator(
+        verify(auditService).recordAuthenticatedOperator(
                 eq(100L), eq(200L), eq("RESOLVE"), eq("HUMAN_REVIEW_CASE"),
-                eq(hrCase.getId()), eq("OPERATOR"), eq("operator-45"), anyString(), anyString()
+                eq(hrCase.getId()), anyString(), anyString()
         );
     }
 
@@ -226,11 +289,11 @@ class HumanReviewServiceTest {
         );
 
         HumanReviewCase resolvedCase = humanReviewService.resolveCase(
-                hrCase.getId(), "REJECTED", "Sorry, you cannot request refund.", "operator-45"
+                hrCase.getId(), HumanReviewResolution.REJECTED, "Sorry, you cannot request refund."
         );
 
         assertThat(resolvedCase.getStatus()).isEqualTo(HumanReviewCaseStatus.RESOLVED);
-        assertThat(resolvedCase.getResolution()).isEqualTo("REJECTED");
+        assertThat(resolvedCase.getResolution()).isEqualTo(HumanReviewResolution.REJECTED);
 
         // Check if workflow status was updated to FAILED
         Optional<Workflow> updatedWorkflow = workflowRepository.findById(200L);

@@ -1,6 +1,6 @@
 package travelcare_agent.api;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import travelcare_agent.common.exception.BusinessException;
@@ -9,6 +9,7 @@ import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.human.entity.HumanReviewCase;
 import travelcare_agent.human.packet.HumanHandoffContextPacket;
 import travelcare_agent.human.service.HumanReviewService;
+import travelcare_agent.enums.HumanReviewResolution;
 
 import java.util.List;
 
@@ -39,32 +40,22 @@ public class HumanReviewController {
     @PostMapping("/{caseId}/assign")
     public Result<HumanReviewCaseResponse> assignCase(
             @PathVariable Long caseId,
-            @RequestBody AssignRequest request
+            @RequestBody(required = false) JsonNode request
     ) {
-        String operatorId = request.getOperatorId();
-        if (operatorId == null || operatorId.trim().isEmpty()) {
-            return Result.fail(ResultCode.VALIDATION_FAILED, "operator_id is required");
+        if (request != null && (!request.isObject() || !request.isEmpty())) {
+            throw new BusinessException(ResultCode.VALIDATION_FAILED, "Assign request must be an empty object");
         }
-        return Result.success(response(humanReviewService.assignCase(caseId, operatorId)));
+        return Result.success(response(humanReviewService.assignCase(caseId)));
     }
 
     @PostMapping("/{caseId}/resolve")
     public Result<HumanReviewCaseResponse> resolveCase(
             @PathVariable Long caseId,
-            @RequestBody ResolveRequest request
+            @RequestBody JsonNode request
     ) {
-        String operatorId = request.getOperatorId();
-        String resolution = request.resolution();
-        String resolutionNote = request.getResolutionNote();
-
-        if (operatorId == null || operatorId.trim().isEmpty()) {
-            return Result.fail(ResultCode.VALIDATION_FAILED, "operator_id is required");
-        }
-        if (resolution == null || resolution.trim().isEmpty()) {
-            return Result.fail(ResultCode.VALIDATION_FAILED, "resolution is required");
-        }
-
-        return Result.success(response(humanReviewService.resolveCase(caseId, resolution, resolutionNote, operatorId)));
+        ResolveCommand command = parseResolveRequest(request);
+        return Result.success(response(humanReviewService.resolveCase(
+                caseId, command.resolution(), command.resolutionNote())));
     }
 
     private HumanReviewCaseResponse response(HumanReviewCase hrCase) {
@@ -73,28 +64,36 @@ public class HumanReviewController {
                 travelcare_agent.human.service.HumanReviewApprovalPolicy.allows(hrCase, packet));
     }
 
-    public record AssignRequest(
-            @JsonProperty("operator_id") String operatorIdSnake,
-            String operatorId
-    ) {
-        public String getOperatorId() {
-            return operatorId != null ? operatorId : operatorIdSnake;
+    private ResolveCommand parseResolveRequest(JsonNode request) {
+        if (request == null || !request.isObject()) {
+            throw new BusinessException(ResultCode.VALIDATION_FAILED, "Resolve request must be an object");
         }
+        java.util.Set<String> allowed = java.util.Set.of("resolution", "resolutionNote", "resolution_note");
+        java.util.Iterator<String> names = request.fieldNames();
+        while (names.hasNext()) {
+            if (!allowed.contains(names.next())) {
+                throw new BusinessException(ResultCode.VALIDATION_FAILED, "Unknown resolve request field");
+            }
+        }
+        JsonNode resolutionNode = request.get("resolution");
+        if (resolutionNode == null || !resolutionNode.isTextual()) {
+            throw new BusinessException(ResultCode.VALIDATION_FAILED, "resolution is required");
+        }
+        HumanReviewResolution resolution;
+        try {
+            resolution = HumanReviewResolution.valueOf(resolutionNode.textValue());
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException(ResultCode.VALIDATION_FAILED, "resolution is invalid");
+        }
+        if (request.has("resolutionNote") && request.has("resolution_note")) {
+            throw new BusinessException(ResultCode.VALIDATION_FAILED, "resolution note must be provided once");
+        }
+        JsonNode noteNode = request.has("resolutionNote") ? request.get("resolutionNote") : request.get("resolution_note");
+        if (noteNode != null && !noteNode.isNull() && !noteNode.isTextual()) {
+            throw new BusinessException(ResultCode.VALIDATION_FAILED, "resolution note must be text");
+        }
+        return new ResolveCommand(resolution, noteNode == null || noteNode.isNull() ? null : noteNode.textValue());
     }
 
-    public record ResolveRequest(
-            String resolution,
-            @JsonProperty("resolution_note") String resolutionNoteSnake,
-            String resolutionNote,
-            @JsonProperty("operator_id") String operatorIdSnake,
-            String operatorId
-    ) {
-        public String getResolutionNote() {
-            return resolutionNote != null ? resolutionNote : resolutionNoteSnake;
-        }
-
-        public String getOperatorId() {
-            return operatorId != null ? operatorId : operatorIdSnake;
-        }
-    }
+    private record ResolveCommand(HumanReviewResolution resolution, String resolutionNote) {}
 }

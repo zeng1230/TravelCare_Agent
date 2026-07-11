@@ -19,6 +19,8 @@ import travelcare_agent.human.entity.HumanReviewCase;
 import travelcare_agent.human.packet.HumanHandoffContextPacketBuilder;
 import travelcare_agent.human.repository.InMemoryHumanReviewCaseRepository;
 import travelcare_agent.human.service.HumanReviewService;
+import travelcare_agent.security.AuthorizationService;
+import travelcare_agent.security.CurrentUser;
 import travelcare_agent.refund.repository.InMemoryRefundCaseRepository;
 import travelcare_agent.refund.entity.RefundCase;
 import travelcare_agent.workflow.entity.Workflow;
@@ -54,9 +56,12 @@ class HumanReviewControllerTest {
         Session session = Session.create(1001L, "WEB");
         session.setId(100L);
         sessions.save(session);
+        AuthorizationService authorizationService = mock(AuthorizationService.class);
+        when(authorizationService.currentUser()).thenReturn(
+                new CurrentUser(99L, "default", java.util.Set.of("OPERATOR")));
         saveWorkflowAndRefund(200L, 300L);
         saveWorkflowAndRefund(201L, 301L);
-        humanReviewService = new HumanReviewService(hrRepo, eventService, auditService, workflowRepo, refundRepo,
+        humanReviewService = new HumanReviewService(hrRepo, eventService, auditService, workflowRepo, refundRepo, null,
                 new HumanHandoffContextPacketBuilder(
                         sessions,
                         new travelcare_agent.conversation.repository.InMemorySessionEventRepository(),
@@ -65,7 +70,9 @@ class HumanReviewControllerTest {
                         refundRepo,
                         emptyTraceRuns(),
                         mock(travelcare_agent.trace.TraceQueryService.class),
-                        new travelcare_agent.trace.RedactionService()));
+                        new travelcare_agent.trace.RedactionService()),
+                sessions,
+                authorizationService);
 
         mockMvc = MockMvcBuilders.standaloneSetup(new HumanReviewController(humanReviewService))
                 .setControllerAdvice(new GlobalExceptionHandler())
@@ -121,11 +128,42 @@ class HumanReviewControllerTest {
 
         mockMvc.perform(post("/api/human-review/cases/{caseId}/assign", hrCase.getId())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"operator_id\":\"operator-99\"}"))
+                        .content("{}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(ResultCode.SUCCESS.code()))
                 .andExpect(jsonPath("$.data.status").value(HumanReviewCaseStatus.ASSIGNED.name()))
-                .andExpect(jsonPath("$.data.assignedTo").value("operator-99"));
+                .andExpect(jsonPath("$.data.assignedTo").value("99"));
+    }
+
+    @Test
+    void assignRejectsAnyClientSuppliedIdentityOrOtherField() throws Exception {
+        HumanReviewCase hrCase = humanReviewService.createCase(
+                100L, 200L, 300L, "REFUND_REVIEW", "HIGH", "PAID_TIMEOUT", "{}");
+
+        mockMvc.perform(post("/api/human-review/cases/{caseId}/assign", hrCase.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator_id\":\"spoofed\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(ResultCode.VALIDATION_FAILED.code()));
+        mockMvc.perform(post("/api/human-review/cases/{caseId}/assign", hrCase.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("[]"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void resolveRejectsUnknownResolutionAndIdentityField() throws Exception {
+        HumanReviewCase hrCase = humanReviewService.createCase(
+                100L, 200L, 300L, "REFUND_REVIEW", "HIGH", "PAID_TIMEOUT", "{}");
+
+        mockMvc.perform(post("/api/human-review/cases/{caseId}/resolve", hrCase.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"resolution\":\"approved\"}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/human-review/cases/{caseId}/resolve", hrCase.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"resolution\":\"REJECTED\",\"operatorId\":\"spoofed\"}"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -134,7 +172,7 @@ class HumanReviewControllerTest {
 
         mockMvc.perform(post("/api/human-review/cases/{caseId}/resolve", hrCase.getId())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"resolution\":\"APPROVED\",\"resolution_note\":\"Approved manually.\",\"operator_id\":\"operator-99\"}"))
+                        .content("{\"resolution\":\"APPROVED\",\"resolution_note\":\"Approved manually.\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(ResultCode.SUCCESS.code()))
                 .andExpect(jsonPath("$.data.status").value(HumanReviewCaseStatus.RESOLVED.name()))

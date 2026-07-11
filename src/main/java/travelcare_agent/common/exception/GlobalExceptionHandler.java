@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import travelcare_agent.common.result.Result;
@@ -42,6 +43,12 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest().body(Result.fail(ResultCode.VALIDATION_FAILED, sanitize(message)));
     }
 
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Result<Void>> handleUnreadableRequest(HttpMessageNotReadableException ex) {
+        return ResponseEntity.badRequest()
+                .body(Result.fail(ResultCode.VALIDATION_FAILED, ResultCode.VALIDATION_FAILED.message()));
+    }
+
     @ExceptionHandler(AuthenticationException.class)
     public ResponseEntity<Result<Void>> handleAuthenticationException(AuthenticationException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
@@ -73,7 +80,8 @@ public class GlobalExceptionHandler {
             case FORBIDDEN -> HttpStatus.FORBIDDEN;
             case NOT_FOUND, ORDER_NOT_FOUND, EVALUATION_DATASET_NOT_FOUND, EVALUATION_CASE_NOT_FOUND,
                     EVALUATION_RUN_NOT_FOUND, EVALUATION_REPORT_NOT_FOUND -> HttpStatus.NOT_FOUND;
-            case EVALUATION_CASE_KEY_DUPLICATED, MANUAL_REFUND_VERIFICATION_REQUIRED -> HttpStatus.CONFLICT;
+            case EVALUATION_CASE_KEY_DUPLICATED, MANUAL_REFUND_VERIFICATION_REQUIRED,
+                    HUMAN_REVIEW_STATE_CONFLICT -> HttpStatus.CONFLICT;
             default -> HttpStatus.INTERNAL_SERVER_ERROR;
         };
     }

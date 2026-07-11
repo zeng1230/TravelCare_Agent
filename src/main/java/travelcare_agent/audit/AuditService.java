@@ -8,21 +8,30 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import travelcare_agent.trace.*;
+import travelcare_agent.security.CurrentUser;
+import travelcare_agent.security.SecurityContextFacade;
 
 @Service
 public class AuditService {
 
     private final AuditLogRepository auditLogRepository;
     private final TraceService traceService;
+    private final SecurityContextFacade securityContextFacade;
 
     public AuditService(AuditLogRepository auditLogRepository) {
-        this(auditLogRepository, null);
+        this(auditLogRepository, null, null);
+    }
+
+    public AuditService(AuditLogRepository auditLogRepository, TraceService traceService) {
+        this(auditLogRepository, traceService, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
-    public AuditService(AuditLogRepository auditLogRepository, TraceService traceService) {
+    public AuditService(AuditLogRepository auditLogRepository, TraceService traceService,
+                        SecurityContextFacade securityContextFacade) {
         this.auditLogRepository = auditLogRepository;
         this.traceService = traceService;
+        this.securityContextFacade = securityContextFacade;
     }
 
     public AuditLog recordOrderQuery(
@@ -133,6 +142,59 @@ public class AuditService {
                 evidenceJson
         );
         return saveTraced(log, action);
+    }
+
+    public AuditLog recordSystem(
+            String tenantId,
+            Long sessionId,
+            Long workflowId,
+            String action,
+            String targetType,
+            Long targetId,
+            String afterJson,
+            String evidenceJson
+    ) {
+        AuditLog log = new AuditLog();
+        log.setTenantId(tenantId);
+        log.setActorType("SYSTEM");
+        log.setActorId("travelcare-agent");
+        log.setSessionId(sessionId);
+        log.setWorkflowId(workflowId);
+        log.setAction(action);
+        log.setTargetType(targetType);
+        log.setTargetId(targetId);
+        log.setAfterJson(afterJson);
+        log.setEvidenceJson(evidenceJson == null ? "{}" : evidenceJson);
+        log.setCreatedAt(LocalDateTime.now());
+        return saveTraced(log, action);
+    }
+
+    public AuditLog recordAuthenticatedOperator(
+            Long sessionId,
+            Long workflowId,
+            String action,
+            String targetType,
+            Long targetId,
+            String afterJson,
+            String evidenceJson
+    ) {
+        if (securityContextFacade == null) {
+            throw new IllegalStateException("Security context is required for authenticated audit records");
+        }
+        CurrentUser user = securityContextFacade.currentUser();
+        AuditLog auditLog = new AuditLog();
+        auditLog.setTenantId(user.tenantId());
+        auditLog.setActorType("OPERATOR");
+        auditLog.setActorId(user.userId().toString());
+        auditLog.setSessionId(sessionId);
+        auditLog.setWorkflowId(workflowId);
+        auditLog.setAction(action);
+        auditLog.setTargetType(targetType);
+        auditLog.setTargetId(targetId);
+        auditLog.setAfterJson(afterJson);
+        auditLog.setEvidenceJson(evidenceJson == null ? "{}" : evidenceJson);
+        auditLog.setCreatedAt(LocalDateTime.now());
+        return saveTraced(auditLog, action);
     }
 
     public AuditLog recordOperator(

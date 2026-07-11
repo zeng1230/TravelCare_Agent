@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import travelcare_agent.enums.HumanReviewCaseStatus;
+import travelcare_agent.enums.HumanReviewResolution;
 
 import java.time.LocalDateTime;
 
@@ -12,6 +13,7 @@ public class HumanReviewCase {
 
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
+    private String tenantId;
     private Long sessionId;
     private Long workflowId;
     private Long refundCaseId;
@@ -21,7 +23,7 @@ public class HumanReviewCase {
     private String reasonCode;
     private String evidenceJson;
     private String assignedTo;
-    private String resolution;
+    private HumanReviewResolution resolution;
     private String resolutionNote;
     private String resolvedBy;
     private LocalDateTime resolvedAt;
@@ -34,6 +36,14 @@ public class HumanReviewCase {
 
     public void setId(Long id) {
         this.id = id;
+    }
+
+    public String getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(String tenantId) {
+        this.tenantId = tenantId;
     }
 
     public Long getSessionId() {
@@ -108,11 +118,11 @@ public class HumanReviewCase {
         this.assignedTo = assignedTo;
     }
 
-    public String getResolution() {
+    public HumanReviewResolution getResolution() {
         return resolution;
     }
 
-    public void setResolution(String resolution) {
+    public void setResolution(HumanReviewResolution resolution) {
         this.resolution = resolution;
     }
 

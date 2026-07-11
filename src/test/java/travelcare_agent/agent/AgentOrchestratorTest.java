@@ -307,9 +307,15 @@ class AgentOrchestratorTest {
         travelcare_agent.audit.AuditService auditService = org.mockito.Mockito.mock(travelcare_agent.audit.AuditService.class);
         travelcare_agent.conversation.service.SessionEventService eventService = org.mockito.Mockito.mock(travelcare_agent.conversation.service.SessionEventService.class);
         travelcare_agent.workflow.repository.InMemoryWorkflowRepository workflowRepo = new travelcare_agent.workflow.repository.InMemoryWorkflowRepository();
+        travelcare_agent.conversation.repository.InMemorySessionRepository sessionRepo =
+                new travelcare_agent.conversation.repository.InMemorySessionRepository();
+        travelcare_agent.conversation.entity.Session session =
+                travelcare_agent.conversation.entity.Session.create(1001L, "WEB");
+        session.setId(101L);
+        sessionRepo.save(session);
 
         travelcare_agent.human.service.HumanReviewService humanReviewService = new travelcare_agent.human.service.HumanReviewService(
-                hrRepo, eventService, auditService, workflowRepo, refundRepo
+                hrRepo, eventService, auditService, workflowRepo, refundRepo, null, null, sessionRepo, null
         );
 
         WorkflowEngine engine = new WorkflowEngine(

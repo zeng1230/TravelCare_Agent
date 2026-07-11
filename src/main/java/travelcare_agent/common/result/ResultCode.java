@@ -15,6 +15,7 @@ public enum ResultCode {
     DRY_RUN_NOT_READY("DRY_RUN_NOT_READY", "Dry run snapshots are not ready"),
     AGENTOPS_DRY_RUN_REQUIRED("AGENTOPS_DRY_RUN_REQUIRED", "AgentOps debug API requires dryRun=true"),
     MANUAL_REFUND_VERIFICATION_REQUIRED("MANUAL_REFUND_VERIFICATION_REQUIRED", "Manual refund requires verified evidence"),
+    HUMAN_REVIEW_STATE_CONFLICT("HUMAN_REVIEW_STATE_CONFLICT", "Human review state conflict"),
     DEEPSEEK_API_KEY_MISSING("DEEPSEEK_API_KEY_MISSING", "DeepSeek API key is missing"),
     EVALUATION_DATASET_NOT_FOUND("EVALUATION_DATASET_NOT_FOUND", "Evaluation dataset not found"),
     EVALUATION_DATASET_NOT_ACTIVE("EVALUATION_DATASET_NOT_ACTIVE", "Evaluation dataset is not active"),

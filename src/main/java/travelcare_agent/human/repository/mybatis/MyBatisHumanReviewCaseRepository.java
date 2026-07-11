@@ -37,20 +37,24 @@ public class MyBatisHumanReviewCaseRepository implements HumanReviewCaseReposito
     }
 
     @Override
-    public Optional<HumanReviewCase> findById(Long id) {
-        return Optional.ofNullable(mapper.selectById(id));
+    public Optional<HumanReviewCase> findByIdAndTenantId(Long id, String tenantId) {
+        return Optional.ofNullable(mapper.selectOne(new LambdaQueryWrapper<HumanReviewCase>()
+                .eq(HumanReviewCase::getId, id)
+                .eq(HumanReviewCase::getTenantId, tenantId)));
     }
 
     @Override
-    public List<HumanReviewCase> findByStatus(HumanReviewCaseStatus status) {
+    public List<HumanReviewCase> findByTenantIdAndStatus(String tenantId, HumanReviewCaseStatus status) {
         return mapper.selectList(new LambdaQueryWrapper<HumanReviewCase>()
+                .eq(HumanReviewCase::getTenantId, tenantId)
                 .eq(HumanReviewCase::getStatus, status));
     }
 
     @Override
-    public Optional<HumanReviewCase> findByWorkflowId(Long workflowId) {
+    public Optional<HumanReviewCase> findByWorkflowIdAndTenantId(Long workflowId, String tenantId) {
         List<HumanReviewCase> list = mapper.selectList(new LambdaQueryWrapper<HumanReviewCase>()
-                .eq(HumanReviewCase::getWorkflowId, workflowId));
+                .eq(HumanReviewCase::getWorkflowId, workflowId)
+                .eq(HumanReviewCase::getTenantId, tenantId));
         return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
     }
 }
