@@ -108,11 +108,11 @@ class HumanReviewControllerTest {
     private void saveWorkflowAndRefund(Long workflowId, Long refundId) {
         Workflow workflow = Workflow.create(100L, "order_refund_inquiry");
         workflow.setId(workflowId);
-        workflowRepo.save(workflow);
+        workflowRepo.insert(workflow);
         RefundCase refund = RefundCase.create(1001L, 10L, workflowId, RefundCaseStatus.NEED_HUMAN,
                 java.math.BigDecimal.TEN, "manual review", "{\"decision\":\"NEED_HUMAN\"}");
         refund.setId(refundId);
-        refundRepo.save(refund);
+        refundRepo.insert(refund);
     }
 
     @Test

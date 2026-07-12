@@ -61,11 +61,11 @@ class HumanReviewServiceTest {
         Workflow defaultWorkflow = Workflow.create(100L, "order_refund_inquiry");
         defaultWorkflow.setId(200L);
         defaultWorkflow.setStatus(WorkflowStatus.NEED_HUMAN);
-        workflowRepository.save(defaultWorkflow);
+        workflowRepository.insert(defaultWorkflow);
         RefundCase defaultRefund = RefundCase.create(1001L, 10L, 200L, RefundCaseStatus.NEED_HUMAN,
                 BigDecimal.TEN, "need manual check", "{\"decision\":\"NEED_HUMAN\"}");
         defaultRefund.setId(300L);
-        refundCaseRepository.save(defaultRefund);
+        refundCaseRepository.insert(defaultRefund);
 
         humanReviewService = new HumanReviewService(
                 hrCaseRepository,
@@ -182,7 +182,7 @@ class HumanReviewServiceTest {
     void creationRejectsSameTenantResourcesWithWrongRelationshipBeforeAudit() {
         Workflow wrongWorkflow = Workflow.create(999L, "order_refund_inquiry");
         wrongWorkflow.setId(203L);
-        workflowRepository.save(wrongWorkflow);
+        workflowRepository.insert(wrongWorkflow);
         clearInvocations(auditService);
 
         assertThatThrownBy(() -> humanReviewService.createCase(
@@ -198,7 +198,7 @@ class HumanReviewServiceTest {
         Workflow workflowWithoutRefund = Workflow.create(100L, "order_refund_inquiry");
         workflowWithoutRefund.setId(202L);
         workflowWithoutRefund.setStatus(WorkflowStatus.NEED_HUMAN);
-        workflowRepository.save(workflowWithoutRefund);
+        workflowRepository.insert(workflowWithoutRefund);
         HumanReviewCase hrCase = humanReviewService.createCase(
                 100L, 202L, null, "REFUND_REVIEW", "HIGH", "NEED_HUMAN", "{}"
         );
@@ -223,11 +223,11 @@ class HumanReviewServiceTest {
         Workflow workflow = Workflow.create(100L, "order_refund_inquiry");
         workflow.setId(200L);
         workflow.setStatus(WorkflowStatus.NEED_HUMAN);
-        workflowRepository.save(workflow);
+        workflowRepository.insert(workflow);
 
         RefundCase refundCase = RefundCase.create(1001L, 10L, 200L, RefundCaseStatus.NEED_HUMAN, BigDecimal.TEN, "need manual check", "{\"decision\":\"NEED_HUMAN\"}");
         refundCase.setId(300L);
-        refundCaseRepository.save(refundCase);
+        refundCaseRepository.insert(refundCase);
 
         HumanReviewCase hrCase = humanReviewService.createCase(
                 100L, 200L, 300L,
@@ -277,11 +277,11 @@ class HumanReviewServiceTest {
         Workflow workflow = Workflow.create(100L, "order_refund_inquiry");
         workflow.setId(200L);
         workflow.setStatus(WorkflowStatus.NEED_HUMAN);
-        workflowRepository.save(workflow);
+        workflowRepository.insert(workflow);
 
         RefundCase refundCase = RefundCase.create(1001L, 10L, 200L, RefundCaseStatus.NEED_HUMAN, BigDecimal.TEN, "need manual check", "{\"decision\":\"NEED_HUMAN\"}");
         refundCase.setId(300L);
-        refundCaseRepository.save(refundCase);
+        refundCaseRepository.insert(refundCase);
 
         HumanReviewCase hrCase = humanReviewService.createCase(
                 100L, 200L, 300L,

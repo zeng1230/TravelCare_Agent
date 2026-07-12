@@ -14,12 +14,22 @@ public class InMemoryWorkflowRepository implements WorkflowRepository {
     private final Map<Long, Workflow> workflows = new ConcurrentHashMap<>();
 
     @Override
-    public Workflow save(Workflow workflow) {
+    public Workflow insert(Workflow workflow) {
         if (workflow.getId() == null) {
             workflow.setId(ids.incrementAndGet());
         }
         workflows.put(workflow.getId(), workflow);
         return workflow;
+    }
+
+    @Override
+    public synchronized int transitionIfCurrent(Workflow workflow, long expectedVersion,
+                                                List<travelcare_agent.enums.WorkflowStatus> expectedStatuses) {
+        Workflow current = workflows.get(workflow.getId());
+        if (current == null || current.getVersion() == null || current.getVersion() != expectedVersion) return 0;
+        workflow.setVersion(expectedVersion + 1);
+        workflows.put(workflow.getId(), workflow);
+        return 1;
     }
 
     @Override

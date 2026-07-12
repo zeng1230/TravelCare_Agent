@@ -14,12 +14,18 @@ public class InMemoryRefundCaseRepository implements RefundCaseRepository {
     private final List<RefundCase> cases = new ArrayList<>();
 
     @Override
-    public synchronized RefundCase save(RefundCase refundCase) {
+    public synchronized RefundCase insert(RefundCase refundCase) {
         if (refundCase.getId() == null) {
             refundCase.setId(ids.incrementAndGet());
         }
         cases.add(refundCase);
         return refundCase;
+    }
+
+    @Override public synchronized int decideIfNeedHuman(RefundCase c, long v) {
+        RefundCase current = cases.stream().filter(x -> x.getId().equals(c.getId())).findFirst().orElse(null);
+        if (current == null || current.getVersion() == null || current.getVersion() != v) return 0;
+        c.setVersion(v + 1); return 1;
     }
 
     @Override
@@ -36,4 +42,3 @@ public class InMemoryRefundCaseRepository implements RefundCaseRepository {
         return List.copyOf(cases);
     }
 }
-

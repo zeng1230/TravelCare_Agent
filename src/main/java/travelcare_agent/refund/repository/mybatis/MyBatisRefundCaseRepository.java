@@ -18,14 +18,13 @@ public class MyBatisRefundCaseRepository implements RefundCaseRepository {
     }
 
     @Override
-    public RefundCase save(RefundCase refundCase) {
-        if (refundCase.getId() == null) {
-            mapper.insert(refundCase);
-        } else {
-            mapper.updateById(refundCase);
-        }
+    public RefundCase insert(RefundCase refundCase) {
+        if (refundCase.getVersion() == null) refundCase.setVersion(0L);
+        mapper.insert(refundCase);
         return refundCase;
     }
+
+    @Override public int decideIfNeedHuman(RefundCase c, long v) { return mapper.decideIfNeedHuman(c, v); }
 
     @Override
     public Optional<RefundCase> findById(Long id) {
@@ -39,4 +38,3 @@ public class MyBatisRefundCaseRepository implements RefundCaseRepository {
         return list.isEmpty() ? Optional.empty() : Optional.of(list.get(0));
     }
 }
-

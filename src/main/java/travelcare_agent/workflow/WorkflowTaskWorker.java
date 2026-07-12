@@ -23,6 +23,10 @@ import travelcare_agent.enums.SessionEventRole;
 import travelcare_agent.enums.WorkflowTaskStatus;
 import travelcare_agent.workflow.entity.WorkflowTask;
 import travelcare_agent.workflow.repository.WorkflowTaskRepository;
+import travelcare_agent.workflow.repository.WorkflowRepository;
+import travelcare_agent.workflow.entity.Workflow;
+import travelcare_agent.enums.WorkflowStatus;
+import travelcare_agent.common.result.ResultCode;
 import travelcare_agent.observability.TravelCareMetrics;
 
 import travelcare_agent.agent.ContextAssembler;
@@ -64,6 +68,12 @@ public class WorkflowTaskWorker {
     private final AgentModelService agentModelService;
     private final TraceService traceService;
     private final TravelCareMetrics metrics;
+    private WorkflowRepository workflowRepository;
+
+    @Autowired
+    public void setWorkflowRepository(WorkflowRepository workflowRepository) {
+        this.workflowRepository = workflowRepository;
+    }
 
     @Autowired
     public WorkflowTaskWorker(
@@ -176,7 +186,12 @@ public class WorkflowTaskWorker {
                         return null;
                     }
 
-                    taskService.updateStatus(taskId, WorkflowTaskStatus.RUNNING);
+                    Workflow workflow = workflowRepository == null ? null
+                            : workflowRepository.findById(lockedTask.getWorkflowId()).orElse(null);
+                    if (workflow != null && !isRunnable(workflow.getStatus())) {
+                        finishSkippedTask(lockedTask, workflow.getStatus(), "WORKFLOW_ALREADY_SETTLED");
+                        return null;
+                    }
                     executeWorkflow(lockedTask);
                     return null;
                 });
@@ -184,6 +199,14 @@ public class WorkflowTaskWorker {
                 log.warn("Lock conflict for task {}: {}", taskId, e.getMessage());
                 taskService.handleWorkerFailure(taskId, "LOCK_CONFLICT", "Could not acquire lock",
                         LocalDateTime.now().plusMinutes(1), traceId);
+            } catch (BusinessException e) {
+                if (e.getResultCode() == ResultCode.CONCURRENT_STATE_CONFLICT) {
+                    handleConcurrentConflict(task, traceId);
+                } else {
+                    log.error("worker event=task_failed taskId={} failureCode=BUSINESS_ERROR", taskId);
+                    taskService.handleWorkerFailure(taskId, "BUSINESS_ERROR", e.getMessage(),
+                            LocalDateTime.now().plusMinutes(1), traceId);
+                }
             } catch (Exception e) {
                 log.error("worker event=task_failed taskId={} failureCode=SYSTEM_ERROR exceptionType={} message={}",
                         taskId, e.getClass().getSimpleName(), safeLogMessage(e.getMessage()));
@@ -358,6 +381,8 @@ public class WorkflowTaskWorker {
             }
 
         } catch (BusinessException be) {
+            if (be.getResultCode() == ResultCode.CONCURRENT_STATE_CONFLICT
+                    || be.getResultCode() == ResultCode.HUMAN_REVIEW_STATE_CONFLICT) throw be;
             safeMarkFailed(agentRun, "FAILED_GENERATION", "BUSINESS_ERROR", be);
             taskService.markTerminalState(task.getId(), WorkflowTaskStatus.FAILED);
         } catch (RuntimeException re) {
@@ -480,6 +505,31 @@ public class WorkflowTaskWorker {
 
     private String escape(String value) {
         return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static boolean isRunnable(WorkflowStatus status) {
+        return status == WorkflowStatus.CREATED || status == WorkflowStatus.RUNNING;
+    }
+
+    private void handleConcurrentConflict(WorkflowTask task, String traceId) {
+        Workflow current = workflowRepository.findById(task.getWorkflowId()).orElse(null);
+        if (current != null && !isRunnable(current.getStatus())) {
+            finishSkippedTask(task, current.getStatus(), "CONCURRENT_WORKFLOW_SETTLED");
+            return;
+        }
+        taskService.handleWorkerFailure(task.getId(), ResultCode.CONCURRENT_STATE_CONFLICT.code(),
+                ResultCode.CONCURRENT_STATE_CONFLICT.message(), LocalDateTime.now().plusMinutes(1), traceId);
+    }
+
+    private void finishSkippedTask(WorkflowTask task, WorkflowStatus status, String reason) {
+        WorkflowTaskStatus target = switch (status) {
+            case RESPONDED -> WorkflowTaskStatus.SUCCEEDED;
+            case NEED_HUMAN -> WorkflowTaskStatus.NEED_HUMAN;
+            case FAILED -> WorkflowTaskStatus.CANCELLED;
+            default -> null;
+        };
+        if (target != null) taskService.markTerminalState(task.getId(), target);
+        taskService.recordSkipped(task.getId(), reason);
     }
 
     private static String safeLogMessage(String value) {

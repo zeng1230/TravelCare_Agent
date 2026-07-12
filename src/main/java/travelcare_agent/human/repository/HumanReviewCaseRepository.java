@@ -7,7 +7,11 @@ import java.util.List;
 import java.util.Optional;
 
 public interface HumanReviewCaseRepository {
-    HumanReviewCase save(HumanReviewCase hrCase);
+    HumanReviewCase insert(HumanReviewCase hrCase);
+
+    int assignIfOpen(HumanReviewCase hrCase, long expectedVersion);
+
+    int resolveIfCurrent(HumanReviewCase hrCase, long expectedVersion);
 
     Optional<HumanReviewCase> findByIdAndTenantId(Long id, String tenantId);
 

@@ -12,6 +12,9 @@ import travelcare_agent.observability.TravelCareMetrics;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.List;
+import travelcare_agent.common.exception.BusinessException;
+import travelcare_agent.common.result.ResultCode;
 
 @Service
 public class WorkflowEngine {
@@ -43,9 +46,9 @@ public class WorkflowEngine {
     @Transactional
     public WorkflowResult start(String workflowType, WorkflowCommand command) {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_WRITE);
-        Workflow workflow = workflowRepository.save(Workflow.create(command.sessionId(), workflowType));
-        workflow.transitionTo(WorkflowStatus.RUNNING, "COLLECTING_ORDER_REFERENCE", "{}");
-        workflowRepository.save(workflow);
+        Workflow workflow = workflowRepository.insert(Workflow.create(command.sessionId(), workflowType));
+        transition(workflow, WorkflowStatus.RUNNING, "COLLECTING_ORDER_REFERENCE", "{}",
+                List.of(WorkflowStatus.CREATED));
         return executeTraced(workflowType, command, workflow);
     }
 
@@ -54,8 +57,12 @@ public class WorkflowEngine {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_WRITE);
         Workflow workflow = workflowRepository.findById(workflowId)
                 .orElseThrow(() -> new IllegalArgumentException("Workflow not found"));
-        workflow.transitionTo(WorkflowStatus.RUNNING, "COLLECTING_ORDER_REFERENCE", "{}");
-        workflowRepository.save(workflow);
+        if (workflow.getStatus() != WorkflowStatus.CREATED && workflow.getStatus() != WorkflowStatus.RUNNING) {
+            throw new BusinessException(ResultCode.HUMAN_REVIEW_STATE_CONFLICT,
+                    "Workflow is not runnable");
+        }
+        transition(workflow, WorkflowStatus.RUNNING, "COLLECTING_ORDER_REFERENCE", "{}",
+                List.of(WorkflowStatus.CREATED, WorkflowStatus.RUNNING));
         return executeTraced(workflowType, command, workflow);
     }
 
@@ -97,6 +104,21 @@ public class WorkflowEngine {
         } else {
             metrics.workflowCompleted(workflowType, workflow.getStatus().name(), workflow.getCurrentStep(), duration);
         }
+    }
+
+    private void transition(Workflow workflow, WorkflowStatus target, String step, String state,
+                            List<WorkflowStatus> expectedStatuses) {
+        long expectedVersion = requireVersion(workflow);
+        workflow.transitionTo(target, step, state);
+        int rows = workflowRepository.transitionIfCurrent(workflow, expectedVersion, expectedStatuses);
+        if (rows == 0) throw new BusinessException(ResultCode.CONCURRENT_STATE_CONFLICT);
+        if (rows != 1) throw new BusinessException(ResultCode.DATA_INTEGRITY_CONFLICT);
+        workflow.setVersion(expectedVersion + 1);
+    }
+
+    private static long requireVersion(Workflow workflow) {
+        if (workflow.getVersion() == null) throw new BusinessException(ResultCode.DATA_INTEGRITY_CONFLICT);
+        return workflow.getVersion();
     }
 
     public record WorkflowCommand(
@@ -143,8 +165,8 @@ public class WorkflowEngine {
 
         public WorkflowStep startStep(String stepName, String inputJson) {
             travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_STEP_WRITE);
-            workflow.transitionTo(WorkflowStatus.RUNNING, stepName, state("running", stepName));
-            workflowRepository.save(workflow);
+            transitionWorkflow(WorkflowStatus.RUNNING, stepName, state("running", stepName),
+                    List.of(WorkflowStatus.RUNNING));
             TraceService.SpanHandle span = traceService == null ? TraceService.SpanHandle.unavailable()
                     : traceService.startSpan(SpanType.WORKFLOW_STEP, stepName, Map.of("workflowId", workflow.getId()));
             WorkflowStep step = WorkflowStep.start(workflow.getId(), stepName, inputJson);
@@ -170,8 +192,8 @@ public class WorkflowEngine {
 
         public WorkflowResult responded(String answer, String stateJson) {
             travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_WRITE);
-            workflow.transitionTo(WorkflowStatus.RESPONDED, "RESPONDED", stateJson);
-            workflowRepository.save(workflow);
+            transitionWorkflow(WorkflowStatus.RESPONDED, "RESPONDED", stateJson,
+                    List.of(WorkflowStatus.RUNNING));
             WorkflowStep step = stepRepository.save(WorkflowStep.start(workflow.getId(), "RESPONDED", "{}"));
             step.succeed(jsonField("answer", answer));
             stepRepository.save(step);
@@ -180,8 +202,8 @@ public class WorkflowEngine {
 
         public WorkflowResult needHuman(String answer, String reasonCode) {
             travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_WRITE);
-            workflow.transitionTo(WorkflowStatus.NEED_HUMAN, "NEED_HUMAN", jsonField("reasonCode", reasonCode));
-            workflowRepository.save(workflow);
+            transitionWorkflow(WorkflowStatus.NEED_HUMAN, "NEED_HUMAN", jsonField("reasonCode", reasonCode),
+                    List.of(WorkflowStatus.RUNNING));
             WorkflowStep step = stepRepository.save(WorkflowStep.start(workflow.getId(), "NEED_HUMAN", "{}"));
             step.succeed(jsonField("reasonCode", reasonCode));
             stepRepository.save(step);
@@ -190,9 +212,20 @@ public class WorkflowEngine {
 
         public WorkflowResult failed(String answer, String reasonCode) {
             travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_WRITE);
-            workflow.transitionTo(WorkflowStatus.FAILED, workflow.getCurrentStep(), jsonField("reasonCode", reasonCode));
-            workflowRepository.save(workflow);
+            transitionWorkflow(WorkflowStatus.FAILED, workflow.getCurrentStep(), jsonField("reasonCode", reasonCode),
+                    List.of(WorkflowStatus.RUNNING));
             return new WorkflowResult(workflow, answer);
+        }
+
+        private void transitionWorkflow(WorkflowStatus target, String step, String state,
+                                        List<WorkflowStatus> expectedStatuses) {
+            Long current = workflow.getVersion();
+            if (current == null) throw new BusinessException(ResultCode.DATA_INTEGRITY_CONFLICT);
+            workflow.transitionTo(target, step, state);
+            int rows = workflowRepository.transitionIfCurrent(workflow, current, expectedStatuses);
+            if (rows == 0) throw new BusinessException(ResultCode.CONCURRENT_STATE_CONFLICT);
+            if (rows != 1) throw new BusinessException(ResultCode.DATA_INTEGRITY_CONFLICT);
+            workflow.setVersion(current + 1);
         }
 
         private static String state(String status, String stepName) {

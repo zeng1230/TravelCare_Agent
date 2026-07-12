@@ -3,6 +3,7 @@ HELP.md
 AGENT.md
 
 /docs/*
+!/docs/pr-5b-concurrent-state-integrity-boundary.md
 !/docs/pr-5a-human-review-identity-tenant-boundary.md
 
 /docs/pr1/*

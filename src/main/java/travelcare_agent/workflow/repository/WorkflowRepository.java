@@ -7,7 +7,9 @@ import java.util.Optional;
 
 public interface WorkflowRepository {
 
-    Workflow save(Workflow workflow);
+    Workflow insert(Workflow workflow);
+
+    int transitionIfCurrent(Workflow workflow, long expectedVersion, List<travelcare_agent.enums.WorkflowStatus> expectedStatuses);
 
     Optional<Workflow> findById(Long workflowId);
 

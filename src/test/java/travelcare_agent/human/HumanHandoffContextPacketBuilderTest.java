@@ -48,7 +48,7 @@ class HumanHandoffContextPacketBuilderTest {
         workflow.setId(20L);
         workflow.transitionTo(WorkflowStatus.NEED_HUMAN, "NEED_HUMAN",
                 "{\"reasonCode\":\"order ownership could not be verified\"}");
-        workflows.save(workflow);
+        workflows.insert(workflow);
 
         InMemoryWorkflowStepRepository steps = new InMemoryWorkflowStepRepository();
         WorkflowStep query = WorkflowStep.start(20L, "QUERYING_ORDER", "{\"orderNo\":\"ORD-1001\"}");
@@ -61,7 +61,7 @@ class HumanHandoffContextPacketBuilderTest {
                 new BigDecimal("188.00"), "order ownership could not be verified",
                 "{\"decision\":\"NEED_HUMAN\",\"checks\":{\"ownership\":\"FAIL\"},\"apiKey\":\"sk-private\"}");
         refund.setId(30L);
-        refunds.save(refund);
+        refunds.insert(refund);
 
         TraceRun run = traceRun();
         TraceRunRepository traceRuns = mock(TraceRunRepository.class);
@@ -138,13 +138,13 @@ class HumanHandoffContextPacketBuilderTest {
         Workflow workflow = Workflow.create(10L, "order_refund_inquiry");
         workflow.setId(20L);
         workflow.transitionTo(WorkflowStatus.NEED_HUMAN, "NEED_HUMAN", "{\"reasonCode\":\"ORDER_LOOKUP_FAILED\"}");
-        workflows.save(workflow);
+        workflows.insert(workflow);
 
         InMemoryRefundCaseRepository refunds = new InMemoryRefundCaseRepository();
         RefundCase refund = RefundCase.create(1001L, 1001L, 20L, RefundCaseStatus.NEED_HUMAN,
                 null, "ORDER_LOOKUP_FAILED", "{\"decision\":\"NEED_HUMAN\"}");
         refund.setId(30L);
-        refunds.save(refund);
+        refunds.insert(refund);
 
         HumanHandoffContextPacketBuilder builder = new HumanHandoffContextPacketBuilder(
                 sessions, events, workflows, new InMemoryWorkflowStepRepository(), refunds,
@@ -172,7 +172,7 @@ class HumanHandoffContextPacketBuilderTest {
         InMemoryWorkflowRepository workflows = new InMemoryWorkflowRepository();
         Workflow workflow = Workflow.create(10L, "order_refund_inquiry");
         workflow.setId(20L);
-        workflows.save(workflow);
+        workflows.insert(workflow);
 
         HumanHandoffContextPacketBuilder builder = new HumanHandoffContextPacketBuilder(
                 sessions(), events, workflows, new InMemoryWorkflowStepRepository(),
@@ -198,12 +198,12 @@ class HumanHandoffContextPacketBuilderTest {
         InMemoryWorkflowRepository workflows = new InMemoryWorkflowRepository();
         Workflow workflow = Workflow.create(10L, "order_refund_inquiry");
         workflow.setId(20L);
-        workflows.save(workflow);
+        workflows.insert(workflow);
         InMemoryRefundCaseRepository refunds = new InMemoryRefundCaseRepository();
         RefundCase refund = RefundCase.create(1001L, 1001L, 20L, RefundCaseStatus.ELIGIBLE,
                 new BigDecimal("188.00"), "eligible", "{}");
         refund.setId(30L);
-        refunds.save(refund);
+        refunds.insert(refund);
         HumanHandoffContextPacketBuilder builder = new HumanHandoffContextPacketBuilder(
                 sessions(), new InMemorySessionEventRepository(), workflows,
                 new InMemoryWorkflowStepRepository(), refunds, emptyTraceRuns(),
@@ -223,12 +223,12 @@ class HumanHandoffContextPacketBuilderTest {
         InMemoryWorkflowRepository workflows = new InMemoryWorkflowRepository();
         Workflow workflow = Workflow.create(10L, "order_refund_inquiry");
         workflow.setId(20L);
-        workflows.save(workflow);
+        workflows.insert(workflow);
         InMemoryRefundCaseRepository refunds = new InMemoryRefundCaseRepository();
         RefundCase refund = RefundCase.create(1001L, 1001L, 20L, RefundCaseStatus.NEED_HUMAN,
                 null, "manual", "{\"decision\":\"NEED_HUMAN\"}");
         refund.setId(30L);
-        refunds.save(refund);
+        refunds.insert(refund);
         TraceRunRepository failingTraceRuns = mock(TraceRunRepository.class);
         when(failingTraceRuns.findLatestBySessionIdAndWorkflowId(10L, 20L))
                 .thenThrow(new IllegalStateException("database payload secret"));

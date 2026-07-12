@@ -127,13 +127,14 @@ public class HumanReviewService {
         hrCase.setRefundCaseId(refundCaseId);
         hrCase.setCaseType(caseType);
         hrCase.setStatus(HumanReviewCaseStatus.OPEN);
+        hrCase.setVersion(0L);
         hrCase.setPriority(priority);
         hrCase.setReasonCode(reasonCode);
         hrCase.setEvidenceJson(contextPacketJson(sessionId, workflowId, refundCaseId, caseType, priority, reasonCode, evidenceJson));
         hrCase.setCreatedAt(LocalDateTime.now());
         hrCase.setUpdatedAt(LocalDateTime.now());
 
-        hrCase = repository.save(hrCase);
+        hrCase = repository.insert(hrCase);
 
         auditService.recordSystem(
                 graph.session().getTenantId(),
@@ -163,11 +164,13 @@ public class HumanReviewService {
                     "Human review case cannot be assigned from status " + hrCase.getStatus());
         }
 
+        long expectedVersion = version(hrCase.getVersion());
         hrCase.setStatus(HumanReviewCaseStatus.ASSIGNED);
         hrCase.setAssignedTo(actor.userId().toString());
         hrCase.setUpdatedAt(LocalDateTime.now());
 
-        hrCase = repository.save(hrCase);
+        requireOne(repository.assignIfOpen(hrCase, expectedVersion));
+        hrCase.setVersion(expectedVersion + 1);
 
         auditService.recordAuthenticatedOperator(
                 hrCase.getSessionId(),
@@ -200,6 +203,20 @@ public class HumanReviewService {
             throw new BusinessException(ResultCode.MANUAL_REFUND_VERIFICATION_REQUIRED);
         }
 
+        long reviewVersion = version(hrCase.getVersion());
+        Workflow workflow = graph.workflow();
+        long workflowVersion = version(workflow.getVersion());
+        RefundCase refundCase = graph.refundCase();
+        long refundVersion = refundCase == null ? 0L : version(refundCase.getVersion());
+
+        WorkflowStatus targetStatus = resolution == HumanReviewResolution.APPROVED
+                ? WorkflowStatus.RESPONDED : WorkflowStatus.FAILED;
+        workflow.transitionTo(targetStatus, "RESOLVED", "{\"resolution\":\"" + resolution
+                + "\",\"note\":\"" + (resolutionNote == null ? "" : resolutionNote) + "\"}");
+        requireOne(workflowRepository.transitionIfCurrent(workflow, workflowVersion,
+                List.of(WorkflowStatus.NEED_HUMAN)));
+        workflow.setVersion(workflowVersion + 1);
+
         hrCase.setStatus(HumanReviewCaseStatus.RESOLVED);
         hrCase.setResolution(resolution);
         hrCase.setResolutionNote(resolutionNote);
@@ -207,7 +224,17 @@ public class HumanReviewService {
         hrCase.setResolvedAt(LocalDateTime.now());
         hrCase.setUpdatedAt(LocalDateTime.now());
 
-        hrCase = repository.save(hrCase);
+        requireOne(repository.resolveIfCurrent(hrCase, reviewVersion));
+        hrCase.setVersion(reviewVersion + 1);
+
+        if (refundCase != null) {
+            RefundCaseStatus refundTargetStatus = resolution == HumanReviewResolution.APPROVED
+                    ? RefundCaseStatus.ELIGIBLE : RefundCaseStatus.INELIGIBLE;
+            refundCase.setStatus(refundTargetStatus);
+            refundCase.setUpdatedAt(LocalDateTime.now());
+            requireOne(refundCaseRepository.decideIfNeedHuman(refundCase, refundVersion));
+            refundCase.setVersion(refundVersion + 1);
+        }
 
         // Audit resolve action
         auditService.recordAuthenticatedOperator(
@@ -228,24 +255,6 @@ public class HumanReviewService {
                     resolutionNote,
                     "{\"source\":\"human_review\",\"caseId\":\"" + hrCase.getId() + "\"}"
             );
-        }
-
-        // Update corresponding workflow status
-        Workflow workflow = graph.workflow();
-        WorkflowStatus targetStatus = resolution == HumanReviewResolution.APPROVED
-                ? WorkflowStatus.RESPONDED : WorkflowStatus.FAILED;
-        workflow.transitionTo(targetStatus, "RESOLVED", "{\"resolution\":\"" + resolution
-                + "\",\"note\":\"" + (resolutionNote == null ? "" : resolutionNote) + "\"}");
-        workflowRepository.save(workflow);
-
-        // Update corresponding refund case status
-        if (graph.refundCase() != null) {
-            RefundCase refundCase = graph.refundCase();
-            RefundCaseStatus refundTargetStatus = resolution == HumanReviewResolution.APPROVED
-                    ? RefundCaseStatus.ELIGIBLE : RefundCaseStatus.INELIGIBLE;
-            refundCase.setStatus(refundTargetStatus);
-            refundCase.setUpdatedAt(LocalDateTime.now());
-            refundCaseRepository.save(refundCase);
         }
 
         return hrCase;
@@ -324,6 +333,16 @@ public class HumanReviewService {
     }
 
     private record ResourceGraph(Session session, Workflow workflow, RefundCase refundCase) {}
+
+    private static long version(Long value) {
+        if (value == null) throw new BusinessException(ResultCode.DATA_INTEGRITY_CONFLICT);
+        return value;
+    }
+
+    private static void requireOne(int rows) {
+        if (rows == 0) throw new BusinessException(ResultCode.CONCURRENT_STATE_CONFLICT);
+        if (rows != 1) throw new BusinessException(ResultCode.DATA_INTEGRITY_CONFLICT);
+    }
 
     private String contextPacketJson(Long sessionId, Long workflowId, Long refundCaseId, String caseType,
             String priority, String reasonCode, String evidenceJson) {

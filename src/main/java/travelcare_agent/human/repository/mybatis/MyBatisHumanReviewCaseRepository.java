@@ -20,21 +20,18 @@ public class MyBatisHumanReviewCaseRepository implements HumanReviewCaseReposito
     }
 
     @Override
-    public HumanReviewCase save(HumanReviewCase hrCase) {
-        if (hrCase.getId() == null) {
-            if (hrCase.getCreatedAt() == null) {
-                hrCase.setCreatedAt(LocalDateTime.now());
-            }
-            if (hrCase.getUpdatedAt() == null) {
-                hrCase.setUpdatedAt(LocalDateTime.now());
-            }
-            mapper.insert(hrCase);
-        } else {
-            hrCase.setUpdatedAt(LocalDateTime.now());
-            mapper.updateById(hrCase);
+    public HumanReviewCase insert(HumanReviewCase hrCase) {
+        if (hrCase.getCreatedAt() == null) {
+            hrCase.setCreatedAt(LocalDateTime.now());
         }
+        if (hrCase.getUpdatedAt() == null) hrCase.setUpdatedAt(LocalDateTime.now());
+        if (hrCase.getVersion() == null) hrCase.setVersion(0L);
+        mapper.insert(hrCase);
         return hrCase;
     }
+
+    @Override public int assignIfOpen(HumanReviewCase c, long v) { return mapper.assignIfOpen(c, v); }
+    @Override public int resolveIfCurrent(HumanReviewCase c, long v) { return mapper.resolveIfCurrent(c, v); }
 
     @Override
     public Optional<HumanReviewCase> findByIdAndTenantId(Long id, String tenantId) {

@@ -81,7 +81,7 @@ class ContextAssemblerTest {
         // 3. Create a workflow and refund case, link to session
         Workflow workflow = Workflow.create(session.getId(), "REFUND_INQUIRY");
         workflow.transitionTo(WorkflowStatus.RUNNING, "INIT", "{}");
-        workflowRepository.save(workflow);
+        workflowRepository.insert(workflow);
 
         RefundCase refundCase = RefundCase.create(
                 userId,
@@ -92,7 +92,7 @@ class ContextAssemblerTest {
                 "flight delay",
                 "{}"
         );
-        refundCaseRepository.save(refundCase);
+        refundCaseRepository.insert(refundCase);
 
         session.setCurrentWorkflowId(workflow.getId());
         sessionRepository.save(session);

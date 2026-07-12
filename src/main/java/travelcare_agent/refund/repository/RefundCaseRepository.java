@@ -6,8 +6,8 @@ import java.util.Optional;
 
 public interface RefundCaseRepository {
 
-    RefundCase save(RefundCase refundCase);
+    RefundCase insert(RefundCase refundCase);
+    int decideIfNeedHuman(RefundCase refundCase, long expectedVersion);
     Optional<RefundCase> findById(Long id);
     Optional<RefundCase> findByWorkflowId(Long workflowId);
 }
-

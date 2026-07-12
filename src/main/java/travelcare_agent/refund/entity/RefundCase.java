@@ -19,6 +19,7 @@ public class RefundCase {
     private Long workflowId;
     private String refundNo;
     private RefundCaseStatus status;
+    private Long version;
     private BigDecimal refundAmount;
     private String reason;
     private String policyResultJson;
@@ -41,6 +42,7 @@ public class RefundCase {
         refundCase.setOrderId(orderId);
         refundCase.setWorkflowId(workflowId);
         refundCase.setStatus(status);
+        refundCase.setVersion(0L);
         refundCase.setRefundAmount(refundAmount);
         refundCase.setReason(reason);
         refundCase.setPolicyResultJson(policyResultJson);
@@ -104,6 +106,9 @@ public class RefundCase {
     public void setStatus(RefundCaseStatus status) {
         this.status = status;
     }
+
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
 
     public BigDecimal getRefundAmount() {
         return refundAmount;

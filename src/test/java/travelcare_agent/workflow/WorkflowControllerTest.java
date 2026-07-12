@@ -69,7 +69,7 @@ class WorkflowControllerTest {
         workflow.setStatus(WorkflowStatus.NEED_HUMAN);
         workflow.setCurrentStep("EVALUATE_POLICY");
         workflow.setStateJson("{\"amount\":100}");
-        workflowRepo.save(workflow);
+        workflowRepo.insert(workflow);
 
         // Set up associations
         WorkflowTask mockTask = new WorkflowTask();
@@ -78,7 +78,7 @@ class WorkflowControllerTest {
         when(taskRepo.findByWorkflowId(workflow.getId())).thenReturn(Optional.of(mockTask));
 
         RefundCase refundCase = RefundCase.create(1L, 2L, workflow.getId(), RefundCaseStatus.NEED_HUMAN, new BigDecimal("100.00"), "reason", "{}");
-        refundRepo.save(refundCase);
+        refundRepo.insert(refundCase);
 
         HumanReviewCase hrCase = new HumanReviewCase();
         hrCase.setTenantId("default");
@@ -89,7 +89,7 @@ class WorkflowControllerTest {
         hrCase.setPriority("HIGH");
         hrCase.setReasonCode("TIMEOUT");
         hrCase.setEvidenceJson("{}");
-        hrRepo.save(hrCase);
+        hrRepo.insert(hrCase);
 
         mockMvc.perform(get("/api/workflows/{workflowId}", workflow.getId()))
                 .andExpect(status().isOk())
@@ -115,7 +115,7 @@ class WorkflowControllerTest {
     @Test
     void testGetWorkflowSteps_Success() throws Exception {
         Workflow workflow = Workflow.create(100L, "ORDER_REFUND");
-        workflowRepo.save(workflow);
+        workflowRepo.insert(workflow);
 
         WorkflowStep step1 = WorkflowStep.start(workflow.getId(), "INIT", "{}");
         step1.succeed("{\"result\":\"ok\"}");
@@ -144,13 +144,13 @@ class WorkflowControllerTest {
     @Test
     void testGetSessionWorkflows_Success() throws Exception {
         Workflow workflow1 = Workflow.create(101L, "ORDER_REFUND");
-        workflowRepo.save(workflow1);
+        workflowRepo.insert(workflow1);
 
         Workflow workflow2 = Workflow.create(101L, "ORDER_REFUND");
-        workflowRepo.save(workflow2);
+        workflowRepo.insert(workflow2);
 
         Workflow workflow3 = Workflow.create(102L, "ORDER_REFUND");
-        workflowRepo.save(workflow3);
+        workflowRepo.insert(workflow3);
 
         mockMvc.perform(get("/api/sessions/{sessionId}/workflows", 101L))
                 .andExpect(status().isOk())

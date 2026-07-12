@@ -1,0 +1,8 @@
+ALTER TABLE workflows
+    MODIFY COLUMN version BIGINT NOT NULL DEFAULT 0;
+
+ALTER TABLE human_review_cases
+    ADD COLUMN version BIGINT NOT NULL DEFAULT 0 AFTER status;
+
+ALTER TABLE refund_cases
+    ADD COLUMN version BIGINT NOT NULL DEFAULT 0 AFTER status;

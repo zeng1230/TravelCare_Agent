@@ -39,7 +39,6 @@ public class Workflow {
         this.status = status;
         this.currentStep = currentStep;
         this.stateJson = stateJson == null ? "{}" : stateJson;
-        this.version = this.version == null ? 1L : this.version + 1;
         this.updatedAt = LocalDateTime.now();
     }
 

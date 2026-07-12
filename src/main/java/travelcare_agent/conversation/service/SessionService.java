@@ -180,7 +180,7 @@ public class SessionService {
 
             if (Boolean.TRUE.equals(async)) {
                 travelcare_agent.workflow.entity.Workflow workflow = travelcare_agent.workflow.entity.Workflow.create(sessionId, "order_refund_inquiry");
-                workflowRepository.save(workflow);
+                workflowRepository.insert(workflow);
 
                 String payload = "{\"message\":\"" + escape(content) + "\",\"userEventId\":" + userEvent.getId()
                         + (trace.available() ? ",\"traceId\":\"" + trace.traceId() + "\",\"parentSpanId\":\"" + trace.rootSpanId() + "\"" : "") + "}";

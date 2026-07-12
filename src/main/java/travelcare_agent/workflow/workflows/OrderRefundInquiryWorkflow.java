@@ -49,7 +49,9 @@ public class OrderRefundInquiryWorkflow implements ExecutableWorkflow {
     public OrderRefundInquiryWorkflow(OrderAdapter orderAdapter, ToolService toolService, Clock clock) {
         this(orderAdapter, toolService, clock, new RefundEligibilityPolicy(clock), new RefundCaseRepository() {
             @Override
-            public RefundCase save(RefundCase refundCase) { return refundCase; }
+            public RefundCase insert(RefundCase refundCase) { return refundCase; }
+            @Override
+            public int decideIfNeedHuman(RefundCase refundCase, long expectedVersion) { return 1; }
             @Override
             public Optional<RefundCase> findById(Long id) { return Optional.empty(); }
             @Override
@@ -131,7 +133,7 @@ public class OrderRefundInquiryWorkflow implements ExecutableWorkflow {
 
         WorkflowStep rules = context.startStep("CHECKING_REFUND_RULES", orderJson(order.get()));
         RefundEligibilityDecision decision = refundEligibilityPolicy.evaluate(order.get(), command.userId());
-        RefundCase refundCase = refundCaseRepository.save(RefundCase.create(
+        RefundCase refundCase = refundCaseRepository.insert(RefundCase.create(
                 command.userId(),
                 order.get().orderId(),
                 context.workflow().getId(),

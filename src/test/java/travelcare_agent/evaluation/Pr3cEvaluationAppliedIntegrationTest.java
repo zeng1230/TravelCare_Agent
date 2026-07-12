@@ -135,14 +135,14 @@ class Pr3cEvaluationAppliedIntegrationTest {
         Workflow workflow = Workflow.create(sessionId, "order_refund_inquiry");
         workflow.transitionTo(WorkflowStatus.NEED_HUMAN, "NEED_HUMAN",
                 "{\"reasonCode\":\"ORDER_LOOKUP_FAILED\"}");
-        workflow = workflows.save(workflow);
+        workflow = workflows.insert(workflow);
         WorkflowStep query = WorkflowStep.start(workflow.getId(), "QUERYING_ORDER",
                 "{\"orderNo\":\"ORD-3C" + seed + "\"}");
         query.succeed(orderJson(seed));
         workflowSteps.save(query);
         RefundCase refund = RefundCase.create(1000L + seed, USER_ID, workflow.getId(), RefundCaseStatus.NEED_HUMAN,
                 new BigDecimal("188.00"), "ORDER_LOOKUP_FAILED", "{\"decision\":\"NEED_HUMAN\"}");
-        refundCases.save(refund);
+        refundCases.insert(refund);
 
         TraceService.RootTrace root = traces.startRootRun(sessionId, USER_ID, null,
                 "mock", "mock-agent", "pr3c-source", Map.of("caseKey", scenario.caseKey()));

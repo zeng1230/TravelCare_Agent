@@ -19,6 +19,7 @@ public class HumanReviewCase {
     private Long refundCaseId;
     private String caseType;
     private HumanReviewCaseStatus status;
+    private Long version;
     private String priority;
     private String reasonCode;
     private String evidenceJson;
@@ -85,6 +86,9 @@ public class HumanReviewCase {
     public void setStatus(HumanReviewCaseStatus status) {
         this.status = status;
     }
+
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
 
     public String getPriority() {
         return priority;

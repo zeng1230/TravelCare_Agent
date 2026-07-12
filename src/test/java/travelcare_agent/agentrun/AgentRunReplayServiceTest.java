@@ -40,7 +40,7 @@ class AgentRunReplayServiceTest {
         repositories.events.save(event(41L, 100L, 2, SessionEventRole.ASSISTANT, "Order is eligible for refund."));
         repositories.chunks.save(chunk(21L, "Refund SOP", "Refund Policy: " + "eligible ".repeat(50)));
         repositories.memories.save(memory(31L, "tone_preference", "never return this raw value"));
-        repositories.workflows.save(workflow(200L));
+        repositories.workflows.insert(workflow(200L));
         repositories.auditLogs.save(auditLog(501L, 100L, 200L, "CONTEXT_ASSEMBLED"));
 
         AgentRunReplayService service = repositories.service();
@@ -268,9 +268,17 @@ class AgentRunReplayServiceTest {
         private final ConcurrentHashMap<Long, Workflow> store = new ConcurrentHashMap<>();
 
         @Override
-        public Workflow save(Workflow workflow) {
+        public Workflow insert(Workflow workflow) {
             store.put(workflow.getId(), workflow);
             return workflow;
+        }
+
+        @Override
+        public int transitionIfCurrent(Workflow workflow, long expectedVersion,
+                                       List<travelcare_agent.enums.WorkflowStatus> expectedStatuses) {
+            workflow.setVersion(expectedVersion + 1);
+            store.put(workflow.getId(), workflow);
+            return 1;
         }
 
         @Override

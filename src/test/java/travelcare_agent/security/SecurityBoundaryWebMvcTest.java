@@ -182,7 +182,7 @@ class SecurityBoundaryWebMvcTest {
             travelcare_agent.workflow.entity.Workflow other =
                     travelcare_agent.workflow.entity.Workflow.create(2002L, "ORDER_REFUND");
             other.setId(3002L);
-            repository.save(other);
+            repository.insert(other);
             return repository;
         }
 

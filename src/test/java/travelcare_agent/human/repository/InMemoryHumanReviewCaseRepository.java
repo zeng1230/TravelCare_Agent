@@ -17,7 +17,7 @@ public class InMemoryHumanReviewCaseRepository implements HumanReviewCaseReposit
     private final Map<Long, HumanReviewCase> cases = new ConcurrentHashMap<>();
 
     @Override
-    public HumanReviewCase save(HumanReviewCase hrCase) {
+    public HumanReviewCase insert(HumanReviewCase hrCase) {
         if (hrCase.getId() == null) {
             hrCase.setId(ids.incrementAndGet());
             if (hrCase.getCreatedAt() == null) {
@@ -27,6 +27,18 @@ public class InMemoryHumanReviewCaseRepository implements HumanReviewCaseReposit
         hrCase.setUpdatedAt(LocalDateTime.now());
         cases.put(hrCase.getId(), hrCase);
         return hrCase;
+    }
+
+    @Override public synchronized int assignIfOpen(HumanReviewCase c, long v) {
+        HumanReviewCase current = cases.get(c.getId());
+        if (current == null || current.getVersion() == null || current.getVersion() != v) return 0;
+        c.setVersion(v + 1); cases.put(c.getId(), c); return 1;
+    }
+
+    @Override public synchronized int resolveIfCurrent(HumanReviewCase c, long v) {
+        HumanReviewCase current = cases.get(c.getId());
+        if (current == null || current.getVersion() == null || current.getVersion() != v) return 0;
+        c.setVersion(v + 1); cases.put(c.getId(), c); return 1;
     }
 
     @Override

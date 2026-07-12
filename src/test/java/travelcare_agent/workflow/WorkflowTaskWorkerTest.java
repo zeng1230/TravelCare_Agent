@@ -13,6 +13,9 @@ import travelcare_agent.conversation.service.SessionEventService;
 import travelcare_agent.enums.WorkflowTaskStatus;
 import travelcare_agent.workflow.entity.WorkflowTask;
 import travelcare_agent.workflow.repository.WorkflowTaskRepository;
+import travelcare_agent.workflow.repository.WorkflowRepository;
+import travelcare_agent.workflow.entity.Workflow;
+import travelcare_agent.enums.WorkflowStatus;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -37,6 +40,7 @@ class WorkflowTaskWorkerTest {
     private travelcare_agent.agent.ContextAssembler contextAssembler;
     private travelcare_agent.agentrun.service.AgentRunService agentRunService;
     private WorkflowTaskWorker worker;
+    private WorkflowRepository workflowRepository;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -45,6 +49,7 @@ class WorkflowTaskWorkerTest {
         taskService = mock(WorkflowTaskService.class);
         lockService = mock(LockService.class);
         workflowEngine = mock(WorkflowEngine.class);
+        workflowRepository = mock(WorkflowRepository.class);
         sessionRepository = mock(SessionRepository.class);
         eventService = mock(SessionEventService.class);
         MockIntentClassifier intentClassifier = new MockIntentClassifier();
@@ -69,6 +74,10 @@ class WorkflowTaskWorkerTest {
                 eventService, intentClassifier, responseGenerator, objectMapper, auditService,
                 humanReviewService, refundCaseRepository, contextAssembler, agentRunService
         );
+        worker.setWorkflowRepository(workflowRepository);
+        Workflow runnable = Workflow.create(100L, "order_refund_inquiry");
+        runnable.setId(10L);
+        when(workflowRepository.findById(10L)).thenReturn(Optional.of(runnable));
 
         travelcare_agent.conversation.entity.SessionEvent event = travelcare_agent.conversation.entity.SessionEvent.create(
                 100L,
@@ -117,6 +126,23 @@ class WorkflowTaskWorkerTest {
                 });
     }
 
+    @Test
+    void processTaskSkipsPausedWorkflowWithoutCallingEngine() {
+        WorkflowTask task = new WorkflowTask();
+        task.setId(1L); task.setWorkflowId(10L); task.setSessionId(100L);
+        task.setStatus(WorkflowTaskStatus.PENDING); task.setTaskType("order_refund_inquiry");
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
+        Workflow paused = Workflow.create(100L, "order_refund_inquiry");
+        paused.setId(10L); paused.setStatus(WorkflowStatus.NEED_HUMAN);
+        when(workflowRepository.findById(10L)).thenReturn(Optional.of(paused));
+
+        worker.processTask(Map.of("taskId", 1L));
+
+        verify(workflowEngine, never()).resume(anyLong(), anyString(), any());
+        verify(taskService).markTerminalState(1L, WorkflowTaskStatus.NEED_HUMAN);
+        verify(taskService).recordSkipped(1L, "WORKFLOW_ALREADY_SETTLED");
+    }
+
 
     @Test
     void processTask_ShouldExecuteWorkflow_WhenTaskIsPending() {
@@ -147,7 +173,7 @@ class WorkflowTaskWorkerTest {
 
         worker.processTask(payload);
 
-        verify(taskService).updateStatus(1L, WorkflowTaskStatus.RUNNING);
+        verify(taskService, never()).updateStatus(1L, WorkflowTaskStatus.RUNNING);
         verify(workflowEngine).resume(eq(10L), eq("order_refund_inquiry"), any());
         verify(taskService).markTerminalState(1L, WorkflowTaskStatus.SUCCEEDED);
         verify(eventService).appendWorkflowRequested(eq(100L), anyString());

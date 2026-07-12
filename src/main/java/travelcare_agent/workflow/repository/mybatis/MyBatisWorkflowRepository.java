@@ -18,13 +18,15 @@ public class MyBatisWorkflowRepository implements WorkflowRepository {
     }
 
     @Override
-    public Workflow save(Workflow workflow) {
-        if (workflow.getId() == null) {
-            mapper.insert(workflow);
-        } else {
-            mapper.updateById(workflow);
-        }
+    public Workflow insert(Workflow workflow) {
+        mapper.insert(workflow);
         return workflow;
+    }
+
+    @Override
+    public int transitionIfCurrent(Workflow workflow, long expectedVersion,
+                                   List<travelcare_agent.enums.WorkflowStatus> expectedStatuses) {
+        return mapper.transitionIfCurrent(workflow, expectedVersion, expectedStatuses);
     }
 
     @Override
