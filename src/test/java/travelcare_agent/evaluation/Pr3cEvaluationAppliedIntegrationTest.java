@@ -126,7 +126,7 @@ class Pr3cEvaluationAppliedIntegrationTest {
 
     private Long createSourceTrace(Scenario scenario) {
         long seed = Math.abs((long) scenario.caseKey().hashCode());
-        Session session = Session.create(USER_ID, "EVALUATION");
+        Session session = Session.create("default", USER_ID, "EVALUATION");
         session = sessions.save(session);
         Long sessionId = session.getId();
         String userMessage = userMessage(scenario, seed);

@@ -184,7 +184,7 @@ class AgentOpsDebugServiceTest {
     private static AgentOpsDebugService service(TraceQueryService queryService, Optional<TraceRun> trace,
             List<RetrievalSnippet> snippets, RetrievalService retrievalService) {
         SessionRepository sessions = mock(SessionRepository.class);
-        Session session = Session.create(1001L, "WEB");
+        Session session = Session.create("default", 1001L, "WEB");
         session.setId(10L);
         when(sessions.findById(10L)).thenReturn(Optional.of(session));
         WorkflowRepository workflows = mock(WorkflowRepository.class);

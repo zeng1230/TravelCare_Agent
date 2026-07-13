@@ -22,10 +22,10 @@ public class Session {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    public static Session create(Long userId, String channel) {
+    public static Session create(String tenantId, Long userId, String channel) {
         LocalDateTime now = LocalDateTime.now();
         Session session = new Session();
-        session.setTenantId("default");
+        session.setTenantId(tenantId);
         session.setUserId(userId);
         session.setChannel(channel);
         session.setStatus(SessionStatus.ACTIVE);

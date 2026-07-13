@@ -253,7 +253,7 @@ class HumanHandoffContextPacketBuilderTest {
 
     private static InMemorySessionRepository sessions() {
         InMemorySessionRepository sessions = new InMemorySessionRepository();
-        Session session = Session.create(1001L, "WEB");
+        Session session = Session.create("default", 1001L, "WEB");
         session.setId(10L);
         sessions.save(session);
         return sessions;

@@ -199,7 +199,8 @@ public class HumanReviewService {
                     "Human review case cannot be resolved from status " + hrCase.getStatus());
         }
 
-        if (resolution == HumanReviewResolution.APPROVED && !approvalAllowed(hrCase)) {
+        // APPROVED is gated before version capture, in-memory mutation, and the first CAS.
+        if (resolution == HumanReviewResolution.APPROVED && !approvalAllowedReadOnly(hrCase)) {
             throw new BusinessException(ResultCode.MANUAL_REFUND_VERIFICATION_REQUIRED);
         }
 
@@ -290,7 +291,17 @@ public class HumanReviewService {
     }
 
     public boolean approvalAllowed(HumanReviewCase hrCase) {
-        return HumanReviewApprovalPolicy.allows(hrCase, contextPacket(hrCase));
+        return HumanReviewApprovalPolicy.allows(hrCase, approvalPacketReadOnly(hrCase));
+    }
+
+    private boolean approvalAllowedReadOnly(HumanReviewCase hrCase) {
+        return HumanReviewApprovalPolicy.allows(hrCase, approvalPacketReadOnly(hrCase));
+    }
+
+    private HumanHandoffContextPacket approvalPacketReadOnly(HumanReviewCase hrCase) {
+        if (contextPacketBuilder == null) return null;
+        // Deliberately do not record degradation here: a rejected approval must be a zero-write path.
+        return contextPacketBuilder.fromStoredEvidenceOutcome(hrCase).value();
     }
 
     public Optional<HumanReviewCase> findByWorkflowId(Long workflowId) {

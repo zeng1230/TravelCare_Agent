@@ -53,7 +53,7 @@ class HumanReviewControllerTest {
         workflowRepo = new InMemoryWorkflowRepository();
         refundRepo = new InMemoryRefundCaseRepository();
         InMemorySessionRepository sessions = new InMemorySessionRepository();
-        Session session = Session.create(1001L, "WEB");
+        Session session = Session.create("default", 1001L, "WEB");
         session.setId(100L);
         sessions.save(session);
         AuthorizationService authorizationService = mock(AuthorizationService.class);
@@ -172,12 +172,12 @@ class HumanReviewControllerTest {
 
         mockMvc.perform(post("/api/human-review/cases/{caseId}/resolve", hrCase.getId())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"resolution\":\"APPROVED\",\"resolution_note\":\"Approved manually.\"}"))
+                        .content("{\"resolution\":\"REJECTED\",\"resolution_note\":\"Rejected manually.\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(ResultCode.SUCCESS.code()))
                 .andExpect(jsonPath("$.data.status").value(HumanReviewCaseStatus.RESOLVED.name()))
-                .andExpect(jsonPath("$.data.resolution").value("APPROVED"))
-                .andExpect(jsonPath("$.data.resolutionNote").value("Approved manually."));
+                .andExpect(jsonPath("$.data.resolution").value("REJECTED"))
+                .andExpect(jsonPath("$.data.resolutionNote").value("Rejected manually."));
     }
 
     private static travelcare_agent.trace.repository.TraceRunRepository emptyTraceRuns() {

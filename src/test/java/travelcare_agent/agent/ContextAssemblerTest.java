@@ -62,7 +62,7 @@ class ContextAssemblerTest {
         String channel = "WEB";
 
         // 1. Create a Session
-        Session session = Session.create(userId, channel);
+        Session session = Session.create("default", userId, channel);
         sessionRepository.save(session);
 
         // 2. Add 25 events (limit is 20, so only last 20 should be returned)
@@ -172,7 +172,7 @@ class ContextAssemblerTest {
     @Test
     void testAssembleDoesNotWriteAuditLogs() {
         Long userId = 1002L;
-        Session session = Session.create(userId, "WEB");
+        Session session = Session.create("default", userId, "WEB");
         sessionRepository.save(session);
 
         sessionEventRepository.save(SessionEvent.create(

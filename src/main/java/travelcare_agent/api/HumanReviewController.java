@@ -60,8 +60,11 @@ public class HumanReviewController {
 
     private HumanReviewCaseResponse response(HumanReviewCase hrCase) {
         HumanHandoffContextPacket packet = humanReviewService.contextPacket(hrCase);
-        return HumanReviewCaseResponse.from(hrCase, packet,
-                travelcare_agent.human.service.HumanReviewApprovalPolicy.allows(hrCase, packet));
+        boolean approvalAllowed = hrCase.getStatus() == travelcare_agent.enums.HumanReviewCaseStatus.RESOLVED
+                && hrCase.getResolution() == HumanReviewResolution.APPROVED
+                ? travelcare_agent.human.service.HumanReviewApprovalPolicy.hasAuthoritativeApprovalEvidence(packet)
+                : travelcare_agent.human.service.HumanReviewApprovalPolicy.allows(hrCase, packet);
+        return HumanReviewCaseResponse.from(hrCase, packet, approvalAllowed);
     }
 
     private ResolveCommand parseResolveRequest(JsonNode request) {

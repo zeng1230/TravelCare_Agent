@@ -177,6 +177,22 @@ class AgentOrchestratorTest {
     }
 
     @Test
+    void ownershipMismatchUsesOwnershipRuleInsteadOfMissingOrderRule() {
+        travelcare_agent.workflow.entity.Workflow workflow =
+                travelcare_agent.workflow.entity.Workflow.create(101L, "order_refund_inquiry");
+        workflow.setStatus(WorkflowStatus.NEED_HUMAN);
+        workflow.setStateJson("{\"reasonCode\":\"order ownership could not be verified\"}");
+
+        String response = new MockResponseGenerator().generate(
+                new MockIntentClassifier.IntentResult("REFUND_INQUIRY", "ORD-1001"),
+                new WorkflowEngine.WorkflowResult(workflow, "manual support will verify this refund inquiry."));
+
+        assertThat(response)
+                .contains("Rule: order ownership must be verified")
+                .doesNotContain("order number is required");
+    }
+
+    @Test
     void unanswerableFallbackReplyDoesNotCallModelForKnowledgeAnswer() {
         AgentModelService modelService = org.mockito.Mockito.mock(AgentModelService.class);
         AgentOrchestrator orchestrator = orchestratorWithOrderAndContext(
@@ -310,7 +326,7 @@ class AgentOrchestratorTest {
         travelcare_agent.conversation.repository.InMemorySessionRepository sessionRepo =
                 new travelcare_agent.conversation.repository.InMemorySessionRepository();
         travelcare_agent.conversation.entity.Session session =
-                travelcare_agent.conversation.entity.Session.create(1001L, "WEB");
+                travelcare_agent.conversation.entity.Session.create("default", 1001L, "WEB");
         session.setId(101L);
         sessionRepo.save(session);
 

@@ -44,6 +44,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.assertj.core.api.Assertions.assertThat;
 
 class SessionControllerTest {
 
@@ -95,6 +96,42 @@ class SessionControllerTest {
                 .andExpect(jsonPath("$.code").value(ResultCode.SUCCESS.code()))
                 .andExpect(jsonPath("$.data.sessionId", notNullValue()))
                 .andExpect(jsonPath("$.data.status").value(SessionStatus.ACTIVE.name()));
+    }
+
+    @Test
+    void authenticatedSessionPersistsCurrentUserTenantAndUser() {
+        var result = sessionService.createAuthenticatedSession(
+                new travelcare_agent.security.CurrentUser(92001L, "rc2-a", java.util.Set.of("USER")), "WEB");
+        var stored = sessionRepository.findById(result.sessionId()).orElseThrow();
+        assertThat(stored.getTenantId()).isEqualTo("rc2-a");
+        assertThat(stored.getUserId()).isEqualTo(92001L);
+
+        var defaultResult = sessionService.createAuthenticatedSession(
+                new travelcare_agent.security.CurrentUser(92002L, "default", java.util.Set.of("USER")), "WEB");
+        assertThat(sessionRepository.findById(defaultResult.sessionId()).orElseThrow().getTenantId())
+                .isEqualTo("default");
+    }
+
+    @Test
+    void eventResponseIsRedactedWithoutMutatingStoredEntity() throws Exception {
+        long sessionId = sessionService.createSystemSession("default", 1001L, "WEB").sessionId();
+        String rawContent = "email=rc2@example.com phone=13812345678 Bearer abc.def.ghi";
+        String rawMetadata = "{\"apiKey\":\"sk-secret\",\"note\":\"rc2@example.com\"}";
+        var stored = eventService.appendMessage(sessionId,
+                travelcare_agent.enums.SessionEventRole.USER, rawContent, rawMetadata);
+
+        for (int i = 0; i < 2; i++) {
+            mockMvc.perform(get("/api/sessions/{sessionId}/events", sessionId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.events[0].content").value(containsString("[REDACTED]")))
+                    .andExpect(jsonPath("$.data.events[0].metadataJson").value(containsString("[REDACTED]")));
+        }
+
+        assertThat(stored.getContent()).isEqualTo(rawContent);
+        assertThat(stored.getMetadataJson()).isEqualTo(rawMetadata);
+        var reread = eventRepository.findBySessionIdOrderBySeqNo(sessionId).get(0);
+        assertThat(reread.getContent()).isEqualTo(rawContent);
+        assertThat(reread.getMetadataJson()).isEqualTo(rawMetadata);
     }
 
     @Test

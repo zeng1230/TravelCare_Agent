@@ -23,7 +23,9 @@ import travelcare_agent.security.CurrentUser;
 import travelcare_agent.refund.entity.RefundCase;
 import travelcare_agent.refund.repository.InMemoryRefundCaseRepository;
 import travelcare_agent.workflow.entity.Workflow;
+import travelcare_agent.workflow.entity.WorkflowStep;
 import travelcare_agent.workflow.repository.InMemoryWorkflowRepository;
+import travelcare_agent.workflow.repository.InMemoryWorkflowStepRepository;
 
 import java.math.BigDecimal;
 import java.util.Optional;
@@ -42,6 +44,7 @@ class HumanReviewServiceTest {
     private InMemoryWorkflowRepository workflowRepository;
     private InMemoryRefundCaseRepository refundCaseRepository;
     private InMemorySessionRepository sessionRepository;
+    private InMemoryWorkflowStepRepository workflowStepRepository;
     private HumanReviewService humanReviewService;
     private AuthorizationService authorizationService;
 
@@ -53,7 +56,8 @@ class HumanReviewServiceTest {
         workflowRepository = new InMemoryWorkflowRepository();
         refundCaseRepository = new InMemoryRefundCaseRepository();
         sessionRepository = new InMemorySessionRepository();
-        Session session = Session.create(1001L, "WEB");
+        workflowStepRepository = new InMemoryWorkflowStepRepository();
+        Session session = Session.create("default", 1001L, "WEB");
         session.setId(100L);
         sessionRepository.save(session);
         authorizationService = mock(AuthorizationService.class);
@@ -78,7 +82,7 @@ class HumanReviewServiceTest {
                         sessionRepository,
                         new travelcare_agent.conversation.repository.InMemorySessionEventRepository(),
                         workflowRepository,
-                        new travelcare_agent.workflow.repository.InMemoryWorkflowStepRepository(),
+                        workflowStepRepository,
                         refundCaseRepository,
                         emptyTraceRuns(),
                         mock(travelcare_agent.trace.TraceQueryService.class),
@@ -218,6 +222,30 @@ class HumanReviewServiceTest {
     }
 
     @Test
+    void approvedResolutionIsBlockedBeforeWritesWhenOwnershipDidNotPass() {
+        WorkflowStep orderFacts = WorkflowStep.start(200L, "QUERYING_ORDER", "{}");
+        orderFacts.succeed("{\"orderId\":\"10\",\"orderNo\":\"ORD-10\",\"status\":\"PAID\",\"refundable\":true}");
+        workflowStepRepository.save(orderFacts);
+        RefundCase refund = refundCaseRepository.findById(300L).orElseThrow();
+        refund.setPolicyResultJson("{\"decision\":\"NEED_HUMAN\",\"checks\":{\"ownership\":\"FAIL\"}}");
+        HumanReviewCase hrCase = humanReviewService.createCase(
+                100L, 200L, 300L, "REFUND_REVIEW", "HIGH", "ownership", "{}");
+        clearInvocations(auditService, eventService);
+
+        assertThatThrownBy(() -> humanReviewService.resolveCase(
+                hrCase.getId(), HumanReviewResolution.APPROVED, "unsafe approval"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(error -> ((BusinessException) error).getResultCode())
+                .isEqualTo(ResultCode.MANUAL_REFUND_VERIFICATION_REQUIRED);
+
+        assertThat(workflowRepository.findById(200L).orElseThrow().getStatus()).isEqualTo(WorkflowStatus.NEED_HUMAN);
+        assertThat(hrCaseRepository.findByIdAndTenantId(hrCase.getId(), "default").orElseThrow().getStatus())
+                .isEqualTo(HumanReviewCaseStatus.OPEN);
+        assertThat(refundCaseRepository.findById(300L).orElseThrow().getStatus()).isEqualTo(RefundCaseStatus.NEED_HUMAN);
+        verifyNoInteractions(auditService, eventService);
+    }
+
+    @Test
     void testResolveCase_Approved() {
         // Setup workflow and refund case
         Workflow workflow = Workflow.create(100L, "order_refund_inquiry");
@@ -225,15 +253,22 @@ class HumanReviewServiceTest {
         workflow.setStatus(WorkflowStatus.NEED_HUMAN);
         workflowRepository.insert(workflow);
 
-        RefundCase refundCase = RefundCase.create(1001L, 10L, 200L, RefundCaseStatus.NEED_HUMAN, BigDecimal.TEN, "need manual check", "{\"decision\":\"NEED_HUMAN\"}");
-        refundCase.setId(300L);
-        refundCaseRepository.insert(refundCase);
+        RefundCase refundCase = refundCaseRepository.findById(300L).orElseThrow();
+        refundCase.setPolicyResultJson(
+                "{\"decision\":\"NEED_HUMAN\",\"checks\":{\"ownership\":\"PASS\"}}");
+        WorkflowStep orderFacts = WorkflowStep.start(200L, "QUERYING_ORDER", "{}");
+        orderFacts.succeed("{\"orderId\":\"10\",\"orderNo\":\"ORD-10\",\"status\":\"PAID\",\"refundable\":true}");
+        workflowStepRepository.save(orderFacts);
 
         HumanReviewCase hrCase = humanReviewService.createCase(
                 100L, 200L, 300L,
                 "REFUND_REVIEW", "HIGH", "PAID_TIMEOUT", "{}"
         );
 
+        HumanHandoffContextPacket approvalPacket = humanReviewService.getContextPacket(hrCase.getId());
+        assertThat(approvalPacket.verifiedOrderFacts().verified()).isTrue();
+        assertThat(approvalPacket.verifiedOrderFacts().orderId()).isEqualTo(10L);
+        assertThat(approvalPacket.refundRuleDecision().policyResultJson()).contains("\"ownership\":\"PASS\"");
         assertThat(humanReviewService.approvalAllowed(hrCase)).isTrue();
 
         HumanReviewCase resolvedCase = humanReviewService.resolveCase(

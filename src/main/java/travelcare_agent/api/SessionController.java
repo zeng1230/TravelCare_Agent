@@ -16,6 +16,7 @@ import travelcare_agent.conversation.service.SessionService;
 import travelcare_agent.agent.ContextAssembler;
 import travelcare_agent.agent.AgentContext;
 import travelcare_agent.security.AuthorizationService;
+import travelcare_agent.trace.RedactionService;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -28,18 +29,21 @@ public class SessionController {
     private final SessionEventService eventService;
     private final ContextAssembler contextAssembler;
     private final AuthorizationService authorizationService;
+    private final RedactionService redactionService;
 
     @Autowired
     public SessionController(
             SessionService sessionService,
             SessionEventService eventService,
             ContextAssembler contextAssembler,
-            AuthorizationService authorizationService
+            AuthorizationService authorizationService,
+            RedactionService redactionService
     ) {
         this.sessionService = sessionService;
         this.eventService = eventService;
         this.contextAssembler = contextAssembler;
         this.authorizationService = authorizationService;
+        this.redactionService = redactionService;
     }
 
     public SessionController(
@@ -47,16 +51,17 @@ public class SessionController {
             SessionEventService eventService,
             ContextAssembler contextAssembler
     ) {
-        this(sessionService, eventService, contextAssembler, null);
+        this(sessionService, eventService, contextAssembler, null, new RedactionService());
     }
 
     @PostMapping
     @PreAuthorize("hasAnyRole('USER','ADMIN')")
     public Result<SessionService.CreateSessionResult> createSession(@RequestBody CreateSessionRequest request) {
-        Long userId = authorizationService == null
-                ? request.userId()
-                : authorizationService.sessionUserForCreate(request.userId());
-        return Result.success(sessionService.createSession(userId, request.channel()));
+        if (authorizationService == null) {
+            return Result.success(sessionService.createSession(request.userId(), request.channel()));
+        }
+        return Result.success(sessionService.createAuthenticatedSession(
+                authorizationService.currentUser(), request.channel()));
     }
 
     @PostMapping("/{sessionId}/messages")
@@ -78,7 +83,7 @@ public class SessionController {
             authorizationService.requireSessionAccess(sessionId);
         }
         List<SessionEventResponse> events = sessionService.listEvents(sessionId).stream()
-                .map(SessionEventResponse::from)
+                .map(event -> SessionEventResponse.from(event, redactionService))
                 .toList();
         return Result.success(new SessionEventsResponse(events));
     }
@@ -114,15 +119,15 @@ public class SessionController {
             String metadataJson,
             LocalDateTime createdAt
     ) {
-        static SessionEventResponse from(SessionEvent event) {
+        static SessionEventResponse from(SessionEvent event, RedactionService redactionService) {
             return new SessionEventResponse(
                     event.getId(),
                     event.getSessionId(),
                     event.getSeqNo(),
                     event.getEventType().name(),
                     event.getRole().name(),
-                    event.getContent(),
-                    event.getMetadataJson(),
+                    redactionService.redact(event.getContent()).value(),
+                    redactionService.redact(event.getMetadataJson()).value(),
                     event.getCreatedAt()
             );
         }

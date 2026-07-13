@@ -156,7 +156,7 @@ class WorkflowTaskWorkerTest {
 
         when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
 
-        Session session = Session.create(1001L, "WEB");
+        Session session = Session.create("default", 1001L, "WEB");
         session.setId(100L);
         when(sessionRepository.findById(100L)).thenReturn(Optional.of(session));
 
@@ -234,7 +234,7 @@ class WorkflowTaskWorkerTest {
 
         when(taskRepository.findById(1L)).thenReturn(Optional.of(task));
 
-        Session session = Session.create(1001L, "WEB");
+        Session session = Session.create("default", 1001L, "WEB");
         session.setId(100L);
         when(sessionRepository.findById(100L)).thenReturn(Optional.of(session));
         when(workflowEngine.resume(eq(10L), eq("order_refund_inquiry"), any()))
@@ -271,7 +271,7 @@ class WorkflowTaskWorkerTest {
         settled.setTaskType("order_refund_inquiry");
 
         when(taskRepository.findById(1L)).thenReturn(Optional.of(task), Optional.of(task), Optional.of(settled));
-        Session session = Session.create(1001L, "WEB");
+        Session session = Session.create("default", 1001L, "WEB");
         session.setId(100L);
         when(sessionRepository.findById(100L)).thenReturn(Optional.of(session));
         WorkflowEngine.WorkflowResult result = new WorkflowEngine.WorkflowResult(
@@ -301,7 +301,7 @@ class WorkflowTaskWorkerTest {
         task.setPayloadJson("{\"message\":\"hello\"}");
 
         when(taskRepository.findById(1L)).thenReturn(Optional.of(task), Optional.of(task), Optional.of(task));
-        Session session = Session.create(1001L, "WEB");
+        Session session = Session.create("default", 1001L, "WEB");
         session.setId(100L);
         when(sessionRepository.findById(100L)).thenReturn(Optional.of(session));
         WorkflowEngine.WorkflowResult result = new WorkflowEngine.WorkflowResult(

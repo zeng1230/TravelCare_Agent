@@ -34,6 +34,7 @@ import travelcare_agent.evaluation.EvaluationDatasetService;
 import travelcare_agent.evaluation.EvaluationRunnerService;
 import travelcare_agent.human.service.HumanReviewService;
 import travelcare_agent.trace.TraceQueryService;
+import travelcare_agent.trace.RedactionService;
 import travelcare_agent.workflow.repository.InMemoryWorkflowRepository;
 import travelcare_agent.workflow.repository.WorkflowRepository;
 import travelcare_agent.workflow.repository.WorkflowStepRepository;
@@ -63,6 +64,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         JwtAuthenticationFilter.class,
         SecurityContextFacade.class,
         AuthorizationService.class,
+        RedactionService.class,
         SecurityBoundaryWebMvcTest.TestBeans.class
 })
 @ActiveProfiles("test")
@@ -86,7 +88,7 @@ class SecurityBoundaryWebMvcTest {
     }
 
     @Test
-    void userCanCreateOwnSessionButCannotImpersonateAnotherUser() throws Exception {
+    void sessionCreationIgnoresBodyUserIdAndUsesAuthenticatedIdentity() throws Exception {
         mvc.perform(post("/api/sessions")
                         .header("Authorization", SecurityTestTokenFactory.bearer(1001L, "tenant-a", "USER"))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -98,7 +100,7 @@ class SecurityBoundaryWebMvcTest {
                         .header("Authorization", SecurityTestTokenFactory.bearer(1001L, "tenant-a", "USER"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"userId\":2002,\"channel\":\"WEB\"}"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isOk());
     }
 
     @Test
@@ -165,11 +167,11 @@ class SecurityBoundaryWebMvcTest {
         @Bean
         SessionRepository sessionRepository() {
             InMemorySessionRepository repository = new InMemorySessionRepository();
-            Session own = Session.create(1001L, "WEB");
+            Session own = Session.create("default", 1001L, "WEB");
             own.setId(1001L);
             own.setTenantId("tenant-a");
             repository.save(own);
-            Session other = Session.create(2002L, "WEB");
+            Session other = Session.create("default", 2002L, "WEB");
             other.setId(2002L);
             other.setTenantId("tenant-b");
             repository.save(other);
@@ -188,7 +190,8 @@ class SecurityBoundaryWebMvcTest {
 
         @Bean SessionService sessionService() {
             SessionService service = mock(SessionService.class);
-            when(service.createSession(1001L, "WEB"))
+            when(service.createAuthenticatedSession(
+                    new CurrentUser(1001L, "tenant-a", java.util.Set.of("USER")), "WEB"))
                     .thenReturn(new SessionService.CreateSessionResult(1234L, "ACTIVE"));
             when(service.listEvents(1001L)).thenReturn(java.util.List.of());
             when(service.listEvents(2002L)).thenReturn(java.util.List.of());

@@ -13,6 +13,7 @@ import travelcare_agent.conversation.entity.SessionEvent;
 import travelcare_agent.conversation.repository.SessionRepository;
 import travelcare_agent.enums.SessionEventRole;
 import travelcare_agent.tool.IdempotencyService;
+import travelcare_agent.security.CurrentUser;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -79,8 +80,18 @@ public class SessionService {
                 workflowTaskService, workflowTaskRepository, objectMapper, auditService, agentRunService, null);
     }
 
-    public CreateSessionResult createSession(Long userId, String channel) {
+    public CreateSessionResult createAuthenticatedSession(CurrentUser user, String channel) {
+        if (user == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, "authenticated user is required");
+        }
+        return createSystemSession(user.tenantId(), user.userId(), channel);
+    }
+
+    public CreateSessionResult createSystemSession(String tenantId, Long userId, String channel) {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.SESSION_WRITE);
+        if (isBlank(tenantId)) {
+            throw new BusinessException(ResultCode.VALIDATION_FAILED, "tenantId is required");
+        }
         if (userId == null) {
             throw new BusinessException(ResultCode.VALIDATION_FAILED, "userId is required");
         }
@@ -88,8 +99,13 @@ public class SessionService {
             throw new BusinessException(ResultCode.VALIDATION_FAILED, "channel is required");
         }
 
-        Session session = repository.save(Session.create(userId, channel.trim()));
+        Session session = repository.save(Session.create(tenantId.trim(), userId, channel.trim()));
         return new CreateSessionResult(session.getId(), session.getStatus().name());
+    }
+
+    /** Explicit compatibility entry point for existing internal default-tenant callers. */
+    public CreateSessionResult createSession(Long userId, String channel) {
+        return createSystemSession("default", userId, channel);
     }
 
     @Transactional
