@@ -169,7 +169,7 @@ public class WorkflowTaskWorker {
 
         try (TraceContextHolder.Scope ignored = asyncSpan.available()
                 ? TraceContextHolder.attach(asyncSpan.traceId(), asyncSpan.spanId()) : null) {
-            if (task.getStatus() != WorkflowTaskStatus.PENDING && task.getStatus() != WorkflowTaskStatus.DISPATCHED) {
+            if (!isTaskRunnable(task.getStatus())) {
                 log.info("Task {} is in status {}, skipping", taskId, task.getStatus());
                 taskService.recordSkipped(taskId, "TERMINAL_OR_NON_RUNNABLE_STATUS");
                 return;
@@ -181,7 +181,7 @@ public class WorkflowTaskWorker {
                 lockService.withLock(lockKey, 30000, () -> {
                     // Re-fetch inside lock to ensure we have latest state
                     WorkflowTask lockedTask = taskRepository.findById(taskId).orElseThrow();
-                    if (lockedTask.getStatus() != WorkflowTaskStatus.PENDING && lockedTask.getStatus() != WorkflowTaskStatus.DISPATCHED) {
+                    if (!isTaskRunnable(lockedTask.getStatus())) {
                         taskService.recordSkipped(taskId, "STALE_AFTER_LOCK");
                         return null;
                     }
@@ -207,6 +207,8 @@ public class WorkflowTaskWorker {
                     taskService.handleWorkerFailure(taskId, "BUSINESS_ERROR", e.getMessage(),
                             LocalDateTime.now().plusMinutes(1), traceId);
                 }
+            } catch (WorkflowTaskStateConflictException e) {
+                handleWorkflowTaskConflict(taskId, traceId, e.getMessage());
             } catch (Exception e) {
                 log.error("worker event=task_failed taskId={} failureCode=SYSTEM_ERROR exceptionType={} message={}",
                         taskId, e.getClass().getSimpleName(), safeLogMessage(e.getMessage()));
@@ -348,7 +350,8 @@ public class WorkflowTaskWorker {
                     trace.traceId(), task.getWorkflowId(), assistantEvent.getId(), Map.of("answer", answer));
 
             if (result.workflow().getStatus() == travelcare_agent.enums.WorkflowStatus.NEED_HUMAN) {
-                taskService.markTerminalState(task.getId(), WorkflowTaskStatus.NEED_HUMAN);
+                taskService.markTerminalState(task.getId(), WorkflowTaskStatus.NEED_HUMAN,
+                        nullToZero(task.getAttemptCount()));
 
                 // Try to resolve refundCaseId
                 Long refundCaseId = refundCaseRepository.findByWorkflowId(task.getWorkflowId())
@@ -375,16 +378,19 @@ public class WorkflowTaskWorker {
                         result.workflow().getStateJson()
                 );
             } else if (result.workflow().getStatus() == travelcare_agent.enums.WorkflowStatus.FAILED) {
-                taskService.markTerminalState(task.getId(), WorkflowTaskStatus.FAILED);
+                taskService.markTerminalState(task.getId(), WorkflowTaskStatus.FAILED,
+                        nullToZero(task.getAttemptCount()));
             } else {
-                taskService.markTerminalState(task.getId(), WorkflowTaskStatus.SUCCEEDED);
+                taskService.markTerminalState(task.getId(), WorkflowTaskStatus.SUCCEEDED,
+                        nullToZero(task.getAttemptCount()));
             }
 
         } catch (BusinessException be) {
             if (be.getResultCode() == ResultCode.CONCURRENT_STATE_CONFLICT
                     || be.getResultCode() == ResultCode.HUMAN_REVIEW_STATE_CONFLICT) throw be;
             safeMarkFailed(agentRun, "FAILED_GENERATION", "BUSINESS_ERROR", be);
-            taskService.markTerminalState(task.getId(), WorkflowTaskStatus.FAILED);
+            taskService.markTerminalState(task.getId(), WorkflowTaskStatus.FAILED,
+                    nullToZero(task.getAttemptCount()));
         } catch (RuntimeException re) {
             throw re;
         } catch (Exception e) {
@@ -511,6 +517,19 @@ public class WorkflowTaskWorker {
         return status == WorkflowStatus.CREATED || status == WorkflowStatus.RUNNING;
     }
 
+    private static boolean isTaskRunnable(WorkflowTaskStatus status) {
+        return status == WorkflowTaskStatus.PENDING
+                || status == WorkflowTaskStatus.DISPATCHED
+                || status == WorkflowTaskStatus.RUNNING;
+    }
+
+    private static boolean isTaskTerminal(WorkflowTaskStatus status) {
+        return status == WorkflowTaskStatus.SUCCEEDED
+                || status == WorkflowTaskStatus.FAILED
+                || status == WorkflowTaskStatus.NEED_HUMAN
+                || status == WorkflowTaskStatus.CANCELLED;
+    }
+
     private void handleConcurrentConflict(WorkflowTask task, String traceId) {
         Workflow current = workflowRepository.findById(task.getWorkflowId()).orElse(null);
         if (current != null && !isRunnable(current.getStatus())) {
@@ -521,6 +540,26 @@ public class WorkflowTaskWorker {
                 ResultCode.CONCURRENT_STATE_CONFLICT.message(), LocalDateTime.now().plusMinutes(1), traceId);
     }
 
+    private void handleWorkflowTaskConflict(Long taskId, String traceId, String reason) {
+        WorkflowTask currentTask = taskRepository.findById(taskId).orElse(null);
+        if (currentTask == null) {
+            log.info("Workflow task {} disappeared after conditional update conflict: {}", taskId, safeLogMessage(reason));
+            return;
+        }
+        if (isTaskTerminal(currentTask.getStatus())) {
+            taskService.recordSkipped(taskId, "TASK_ALREADY_SETTLED");
+            return;
+        }
+        Workflow currentWorkflow = workflowRepository == null ? null
+                : workflowRepository.findById(currentTask.getWorkflowId()).orElse(null);
+        if (currentWorkflow != null && !isRunnable(currentWorkflow.getStatus())) {
+            finishSkippedTask(currentTask, currentWorkflow.getStatus(), "TASK_CONFLICT_WORKFLOW_SETTLED");
+            return;
+        }
+        taskService.handleWorkerFailure(taskId, ResultCode.CONCURRENT_STATE_CONFLICT.code(),
+                ResultCode.CONCURRENT_STATE_CONFLICT.message(), LocalDateTime.now().plusMinutes(1), traceId);
+    }
+
     private void finishSkippedTask(WorkflowTask task, WorkflowStatus status, String reason) {
         WorkflowTaskStatus target = switch (status) {
             case RESPONDED -> WorkflowTaskStatus.SUCCEEDED;
@@ -528,11 +567,21 @@ public class WorkflowTaskWorker {
             case FAILED -> WorkflowTaskStatus.CANCELLED;
             default -> null;
         };
-        if (target != null) taskService.markTerminalState(task.getId(), target);
+        if (target != null) {
+            try {
+                taskService.markTerminalState(task.getId(), target, nullToZero(task.getAttemptCount()));
+            } catch (WorkflowTaskStateConflictException ignored) {
+                // Another worker already settled or retried this task; record a skip without overwriting state.
+            }
+        }
         taskService.recordSkipped(task.getId(), reason);
     }
 
     private static String safeLogMessage(String value) {
         return RedactionBoundary.sanitizeLogField(value, 160);
+    }
+
+    private static int nullToZero(Integer value) {
+        return value == null ? 0 : value;
     }
 }

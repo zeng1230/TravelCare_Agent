@@ -5,18 +5,27 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import travelcare_agent.config.RabbitMqConfig;
 import travelcare_agent.enums.WorkflowTaskStatus;
+import travelcare_agent.observability.TravelCareMetrics;
 import travelcare_agent.outbox.OutboxEvent;
 import travelcare_agent.outbox.OutboxEventService;
-import travelcare_agent.observability.TravelCareMetrics;
 import travelcare_agent.workflow.entity.WorkflowTask;
 import travelcare_agent.workflow.event.TaskCreatedEvent;
 import travelcare_agent.workflow.repository.WorkflowTaskRepository;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 @Service
 public class WorkflowTaskService {
+
+    private static final List<WorkflowTaskStatus> ACTIVE_STATUSES = List.of(
+            WorkflowTaskStatus.PENDING,
+            WorkflowTaskStatus.DISPATCHED,
+            WorkflowTaskStatus.RUNNING
+    );
+    private static final List<WorkflowTaskStatus> METADATA_STATUSES = List.of(WorkflowTaskStatus.values());
 
     private final WorkflowTaskRepository repository;
     private final ApplicationEventPublisher eventPublisher;
@@ -56,43 +65,51 @@ public class WorkflowTaskService {
         task.setPayloadJson(payloadJson);
         task.setAttemptCount(0);
         task.setMaxAttempts(3);
-        WorkflowTask saved = repository.save(task);
-        createDispatchOutbox(saved, traceId, parentSpanId, 0, null);
-        eventPublisher.publishEvent(new TaskCreatedEvent(saved.getId(), sessionId, workflowId, correlationId, traceId, parentSpanId));
+        WorkflowTask saved = repository.insert(task);
+        eventPublisher.publishEvent(new TaskCreatedEvent(saved.getId(), sessionId, workflowId,
+                correlationId, traceId, parentSpanId));
         return saved;
     }
 
-    public WorkflowTask updateStatus(Long taskId, WorkflowTaskStatus status) {
+    @Transactional
+    public Optional<WorkflowTask> dispatchTaskIfPending(Long taskId, String correlationId, String traceId,
+            String parentSpanId) {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
         WorkflowTask task = repository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
-        task.setStatus(status);
-        return repository.save(task);
+        if (repository.claimForDispatch(taskId, LocalDateTime.now()) != 1) {
+            return Optional.empty();
+        }
+        WorkflowTask claimed = repository.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found"));
+        OutboxEvent event = createDispatchOutbox(claimed, correlationId, traceId, parentSpanId, null);
+        updateLastOutboxEventId(claimed, event.getId(), List.of(WorkflowTaskStatus.DISPATCHED));
+        return repository.findById(taskId);
+    }
+
+    public WorkflowTask updateStatus(Long taskId, WorkflowTaskStatus status) {
+        if (status != WorkflowTaskStatus.DISPATCHED) {
+            throw new IllegalArgumentException("Unsupported WorkflowTask status update: " + status);
+        }
+        return dispatchTaskIfPending(taskId, null, null, null)
+                .orElseThrow(() -> conflict(taskId, "Workflow task dispatch claim failed"));
     }
 
     public WorkflowTask incrementRetry(Long taskId, String errorCode, String errorMessage, LocalDateTime nextRunAt) {
-        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
-        WorkflowTask task = repository.findById(taskId)
-                .orElseThrow(() -> new IllegalArgumentException("Task not found"));
-        task.setAttemptCount(task.getAttemptCount() + 1);
-        task.setLastErrorCode(errorCode);
-        task.setLastErrorMessage(errorMessage);
-        if (task.getAttemptCount() >= task.getMaxAttempts()) {
-            task.setStatus(WorkflowTaskStatus.FAILED);
-        } else {
-            task.setNextRunAt(nextRunAt);
-        }
-        return repository.save(task);
+        return handleWorkerFailure(taskId, errorCode, errorMessage, nextRunAt, null);
     }
 
     @Transactional
     public WorkflowTask recordSkipped(Long taskId, String skippedReason) {
         WorkflowTask task = repository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
-        task.setLastSkippedReason(safeCode(skippedReason));
-        WorkflowTask saved = repository.save(task);
-        if (metrics != null) metrics.workerSkipped(saved.getTaskType(), saved.getLastSkippedReason());
-        return saved;
+        String safeReason = safeCode(skippedReason);
+        int rows = repository.recordSkippedReasonIfCurrent(taskId, task.getLastSkippedReason(), safeReason,
+                METADATA_STATUSES, LocalDateTime.now());
+        WorkflowTask current = repository.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found"));
+        if (rows == 1 && metrics != null) metrics.workerSkipped(current.getTaskType(), safeReason);
+        return current;
     }
 
     @Transactional
@@ -101,37 +118,46 @@ public class WorkflowTaskService {
         travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
         WorkflowTask task = repository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
-        int attempts = nullToZero(task.getAttemptCount()) + 1;
-        task.setAttemptCount(attempts);
-        task.setLastErrorCode(safeCode(errorCode));
-        task.setLastErrorMessage(safeMessage(errorMessage));
-        if (attempts >= nullToMax(task.getMaxAttempts())) {
-            task.setStatus(WorkflowTaskStatus.FAILED);
-            task.setDeadLetterReason("MAX_ATTEMPTS_REACHED");
-            WorkflowTask saved = repository.save(task);
-            createDeadLetterOutbox(saved, traceId, safeCode(errorCode), attempts, "MAX_ATTEMPTS_REACHED");
-            if (metrics != null) metrics.workerDeadLettered(saved.getTaskType(), safeCode(errorCode));
-            return saved;
+        int expectedAttempt = nullToZero(task.getAttemptCount());
+        int nextAttempt = expectedAttempt + 1;
+        String safeCode = safeCode(errorCode);
+        String safeMessage = safeMessage(errorMessage);
+        if (nextAttempt >= nullToMax(task.getMaxAttempts())) {
+            int rows = repository.failIfCurrent(taskId, expectedAttempt, safeCode, safeMessage,
+                    "MAX_ATTEMPTS_REACHED", LocalDateTime.now());
+            if (rows != 1) throw conflict(taskId, "Workflow task failure update conflicted");
+            WorkflowTask saved = repository.findById(taskId).orElseThrow();
+            OutboxEvent event = createDeadLetterOutbox(saved, traceId, safeCode, nextAttempt, "MAX_ATTEMPTS_REACHED");
+            updateLastOutboxEventId(saved, event.getId(), List.of(WorkflowTaskStatus.FAILED));
+            WorkflowTask current = repository.findById(taskId).orElseThrow();
+            if (metrics != null) metrics.workerDeadLettered(current.getTaskType(), safeCode);
+            return current;
         }
-        task.setNextRunAt(nextRunAt);
-        WorkflowTask saved = repository.save(task);
-        createDispatchOutbox(saved, traceId, null, attempts, nextRunAt);
-        if (metrics != null) metrics.workerRetryScheduled(saved.getTaskType(), safeCode(errorCode));
-        return saved;
+        int rows = repository.retryIfCurrent(taskId, expectedAttempt, safeCode, safeMessage,
+                nextRunAt, LocalDateTime.now());
+        if (rows != 1) throw conflict(taskId, "Workflow task retry update conflicted");
+        WorkflowTask current = repository.findById(taskId).orElseThrow();
+        if (metrics != null) metrics.workerRetryScheduled(current.getTaskType(), safeCode);
+        return current;
     }
 
     public WorkflowTask markTerminalState(Long taskId, WorkflowTaskStatus terminalStatus) {
-        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
-        if (terminalStatus != WorkflowTaskStatus.SUCCEEDED && 
-            terminalStatus != WorkflowTaskStatus.FAILED && 
-            terminalStatus != WorkflowTaskStatus.NEED_HUMAN &&
-            terminalStatus != WorkflowTaskStatus.CANCELLED) {
-            throw new IllegalArgumentException("Not a terminal state");
-        }
         WorkflowTask task = repository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("Task not found"));
-        task.setStatus(terminalStatus);
-        WorkflowTask saved = repository.save(task);
+        return markTerminalState(taskId, terminalStatus, nullToZero(task.getAttemptCount()));
+    }
+
+    @Transactional
+    public WorkflowTask markTerminalState(Long taskId, WorkflowTaskStatus terminalStatus, int expectedAttemptCount) {
+        travelcare_agent.dryrun.SideEffectGuard.checkCurrent(travelcare_agent.dryrun.SideEffectOperation.WORKFLOW_TASK_WRITE);
+        if (!isTerminal(terminalStatus)) {
+            throw new IllegalArgumentException("Not a terminal state");
+        }
+        int rows = repository.markTerminalIfCurrentIn(taskId, terminalStatus, ACTIVE_STATUSES,
+                expectedAttemptCount, LocalDateTime.now());
+        if (rows != 1) throw conflict(taskId, "Workflow task terminal update conflicted");
+        WorkflowTask saved = repository.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Task not found"));
         if (metrics != null) {
             if (terminalStatus == WorkflowTaskStatus.SUCCEEDED) {
                 metrics.workerSucceeded(saved.getTaskType());
@@ -144,32 +170,31 @@ public class WorkflowTaskService {
         return saved;
     }
 
-    private void createDispatchOutbox(WorkflowTask task, String traceId, String parentSpanId, int attempts,
-            LocalDateTime nextRetryAt) {
+    private OutboxEvent createDispatchOutbox(WorkflowTask task, String correlationId, String traceId,
+            String parentSpanId, LocalDateTime nextRetryAt) {
         if (outboxEventService == null) {
-            return;
+            throw new IllegalStateException("OutboxEventService is required for workflow task dispatch");
         }
         String payload = "{\"taskId\":" + task.getId()
+                + ",\"correlationId\":" + jsonString(correlationId)
                 + ",\"traceId\":" + jsonString(traceId)
                 + ",\"parentSpanId\":" + jsonString(parentSpanId)
                 + "}";
-        OutboxEvent event = outboxEventService.createOrReuse(new OutboxEventService.CreateCommand(
+        return outboxEventService.createOrReuse(new OutboxEventService.CreateCommand(
                 "WORKFLOW_TASK_DISPATCH",
                 "workflow_task",
                 String.valueOf(task.getId()),
                 RabbitMqConfig.ROUTING_KEY_WORKFLOW_TASKS,
                 payload,
-                "workflow_task:" + task.getId() + ":attempt:" + attempts,
+                "workflow_task:" + task.getId() + ":attempt:" + nullToZero(task.getAttemptCount()),
                 traceId,
                 nextRetryAt));
-        task.setLastOutboxEventId(event.getId());
-        repository.save(task);
     }
 
-    private void createDeadLetterOutbox(WorkflowTask task, String traceId, String failureCode, int attempts,
+    private OutboxEvent createDeadLetterOutbox(WorkflowTask task, String traceId, String failureCode, int attempts,
             String reason) {
         if (outboxEventService == null) {
-            return;
+            throw new IllegalStateException("OutboxEventService is required for workflow task dead letter");
         }
         String payload = "{\"taskId\":" + task.getId()
                 + ",\"workflowId\":" + task.getWorkflowId()
@@ -181,7 +206,7 @@ public class WorkflowTaskService {
                 + ",\"outboxEventId\":null"
                 + ",\"createdAt\":" + jsonString(LocalDateTime.now().toString())
                 + "}";
-        OutboxEvent event = outboxEventService.createOrReuse(new OutboxEventService.CreateCommand(
+        return outboxEventService.createOrReuse(new OutboxEventService.CreateCommand(
                 "WORKFLOW_TASK_DEAD_LETTER",
                 "workflow_task",
                 String.valueOf(task.getId()),
@@ -190,8 +215,24 @@ public class WorkflowTaskService {
                 "workflow_task:" + task.getId() + ":dead-letter:" + attempts,
                 traceId,
                 null));
-        task.setLastOutboxEventId(event.getId());
-        repository.save(task);
+    }
+
+    private void updateLastOutboxEventId(WorkflowTask task, Long outboxEventId,
+            List<WorkflowTaskStatus> allowedStatuses) {
+        int rows = repository.updateLastOutboxEventIdIfCurrent(task.getId(), task.getLastOutboxEventId(),
+                outboxEventId, allowedStatuses, LocalDateTime.now());
+        if (rows != 1) throw conflict(task.getId(), "Workflow task outbox metadata update conflicted");
+    }
+
+    private static boolean isTerminal(WorkflowTaskStatus status) {
+        return status == WorkflowTaskStatus.SUCCEEDED
+                || status == WorkflowTaskStatus.FAILED
+                || status == WorkflowTaskStatus.NEED_HUMAN
+                || status == WorkflowTaskStatus.CANCELLED;
+    }
+
+    private static WorkflowTaskStateConflictException conflict(Long taskId, String message) {
+        return new WorkflowTaskStateConflictException(taskId, message);
     }
 
     private static int nullToZero(Integer value) {

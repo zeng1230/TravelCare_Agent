@@ -139,7 +139,7 @@ class WorkflowTaskWorkerTest {
         worker.processTask(Map.of("taskId", 1L));
 
         verify(workflowEngine, never()).resume(anyLong(), anyString(), any());
-        verify(taskService).markTerminalState(1L, WorkflowTaskStatus.NEED_HUMAN);
+        verify(taskService).markTerminalState(1L, WorkflowTaskStatus.NEED_HUMAN, 0);
         verify(taskService).recordSkipped(1L, "WORKFLOW_ALREADY_SETTLED");
     }
 
@@ -173,9 +173,8 @@ class WorkflowTaskWorkerTest {
 
         worker.processTask(payload);
 
-        verify(taskService, never()).updateStatus(1L, WorkflowTaskStatus.RUNNING);
         verify(workflowEngine).resume(eq(10L), eq("order_refund_inquiry"), any());
-        verify(taskService).markTerminalState(1L, WorkflowTaskStatus.SUCCEEDED);
+        verify(taskService).markTerminalState(1L, WorkflowTaskStatus.SUCCEEDED, 0);
         verify(eventService).appendWorkflowRequested(eq(100L), anyString());
         verify(eventService).appendMessage(eq(100L), eq(travelcare_agent.enums.SessionEventRole.ASSISTANT), anyString(), anyString());
         verify(auditService).recordKnowledgeRetrieved(eq(100L), eq(10L), eq(java.util.List.of(201L)), eq(java.util.List.of(202L)));
@@ -253,5 +252,72 @@ class WorkflowTaskWorkerTest {
                 any(RuntimeException.class)
         );
         verify(taskService).handleWorkerFailure(eq(1L), eq("SYSTEM_ERROR"), eq("workflow resume failed"), any(), any());
+    }
+
+    @Test
+    void processTask_ShouldTreatTaskStateConflictOnSettledTaskAsSkipNotSystemError() {
+        WorkflowTask task = new WorkflowTask();
+        task.setId(1L);
+        task.setWorkflowId(10L);
+        task.setSessionId(100L);
+        task.setStatus(WorkflowTaskStatus.PENDING);
+        task.setTaskType("order_refund_inquiry");
+        task.setPayloadJson("{\"message\":\"hello\"}");
+        WorkflowTask settled = new WorkflowTask();
+        settled.setId(1L);
+        settled.setWorkflowId(10L);
+        settled.setSessionId(100L);
+        settled.setStatus(WorkflowTaskStatus.SUCCEEDED);
+        settled.setTaskType("order_refund_inquiry");
+
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task), Optional.of(task), Optional.of(settled));
+        Session session = Session.create(1001L, "WEB");
+        session.setId(100L);
+        when(sessionRepository.findById(100L)).thenReturn(Optional.of(session));
+        WorkflowEngine.WorkflowResult result = new WorkflowEngine.WorkflowResult(
+                travelcare_agent.workflow.entity.Workflow.create(100L, "order_refund_inquiry"),
+                "answer"
+        );
+        result.workflow().setId(10L);
+        result.workflow().setStatus(travelcare_agent.enums.WorkflowStatus.RESPONDED);
+        when(workflowEngine.resume(eq(10L), eq("order_refund_inquiry"), any())).thenReturn(result);
+        doThrow(new WorkflowTaskStateConflictException(1L, "stale"))
+                .when(taskService).markTerminalState(1L, WorkflowTaskStatus.SUCCEEDED, 0);
+
+        worker.processTask(Map.of("taskId", 1L));
+
+        verify(taskService).recordSkipped(1L, "TASK_ALREADY_SETTLED");
+        verify(taskService, never()).handleWorkerFailure(eq(1L), eq("SYSTEM_ERROR"), anyString(), any(), any());
+    }
+
+    @Test
+    void processTask_ShouldRetryRunnableWorkflowAfterTaskStateConflict() {
+        WorkflowTask task = new WorkflowTask();
+        task.setId(1L);
+        task.setWorkflowId(10L);
+        task.setSessionId(100L);
+        task.setStatus(WorkflowTaskStatus.PENDING);
+        task.setTaskType("order_refund_inquiry");
+        task.setPayloadJson("{\"message\":\"hello\"}");
+
+        when(taskRepository.findById(1L)).thenReturn(Optional.of(task), Optional.of(task), Optional.of(task));
+        Session session = Session.create(1001L, "WEB");
+        session.setId(100L);
+        when(sessionRepository.findById(100L)).thenReturn(Optional.of(session));
+        WorkflowEngine.WorkflowResult result = new WorkflowEngine.WorkflowResult(
+                travelcare_agent.workflow.entity.Workflow.create(100L, "order_refund_inquiry"),
+                "answer"
+        );
+        result.workflow().setId(10L);
+        result.workflow().setStatus(travelcare_agent.enums.WorkflowStatus.RESPONDED);
+        when(workflowEngine.resume(eq(10L), eq("order_refund_inquiry"), any())).thenReturn(result);
+        doThrow(new WorkflowTaskStateConflictException(1L, "stale"))
+                .when(taskService).markTerminalState(1L, WorkflowTaskStatus.SUCCEEDED, 0);
+
+        worker.processTask(Map.of("taskId", 1L));
+
+        verify(taskService).handleWorkerFailure(eq(1L), eq(travelcare_agent.common.result.ResultCode.CONCURRENT_STATE_CONFLICT.code()),
+                eq(travelcare_agent.common.result.ResultCode.CONCURRENT_STATE_CONFLICT.message()), any(), any());
+        verify(taskService, never()).handleWorkerFailure(eq(1L), eq("SYSTEM_ERROR"), anyString(), any(), any());
     }
 }
